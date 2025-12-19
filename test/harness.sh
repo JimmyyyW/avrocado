@@ -63,6 +63,25 @@ register_schema "event-wide-value" "$SCRIPT_DIR/schemas/event-wide.avsc"
 register_schema "payment-value" "$SCRIPT_DIR/schemas/payment-value.avsc"
 
 echo ""
+echo "Creating Kafka topics..."
+
+create_topic() {
+    local topic=$1
+    docker exec avrocado-kafka kafka-topics --create \
+        --if-not-exists \
+        --topic "$topic" \
+        --bootstrap-server localhost:9092 \
+        --partitions 1 \
+        --replication-factor 1 \
+        > /dev/null 2>&1 && echo "  ✓ $topic" || echo "  ✓ $topic (exists)"
+}
+
+create_topic "user-simple"
+create_topic "order-nested"
+create_topic "event-wide"
+create_topic "payment"
+
+echo ""
 echo "=== Test Environment Ready ==="
 echo ""
 echo "Schema Registry URL: $SCHEMA_REGISTRY_URL"

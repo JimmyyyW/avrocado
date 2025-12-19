@@ -61,4 +61,8 @@ var (
 			Bold(true).
 			Foreground(editColor).
 			MarginLeft(1)
+
+	SuccessStyle = lipgloss.NewStyle().
+			Foreground(special).
+			Bold(true)
 )

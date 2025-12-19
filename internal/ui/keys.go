@@ -60,16 +60,16 @@ var Keys = KeyMap{
 		key.WithHelp("pgdn", "page down"),
 	),
 	Edit: key.NewBinding(
-		key.WithKeys("e"),
-		key.WithHelp("e", "edit"),
+		key.WithKeys("s", "e"),
+		key.WithHelp("s", "send mode"),
 	),
 	EditExternal: key.NewBinding(
 		key.WithKeys("E"),
 		key.WithHelp("E", "$EDITOR"),
 	),
 	Send: key.NewBinding(
-		key.WithKeys("ctrl+enter", "ctrl+s"),
-		key.WithHelp("ctrl+enter", "send"),
+		key.WithKeys("ctrl+s"),
+		key.WithHelp("ctrl+s", "send"),
 	),
 }
 

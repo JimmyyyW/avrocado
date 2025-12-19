@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -34,7 +35,7 @@ const (
 	stateBrowsing
 	stateSearching
 	stateViewing
-	stateEditing
+	stateSendMode
 	stateSending
 )
 
@@ -51,7 +52,8 @@ type Model struct {
 	schemaID         int
 
 	searchInput textinput.Model
-	editor      textarea.Model
+	viewer      viewport.Model  // Read-only schema view
+	editor      textarea.Model  // Editable send mode
 	help        help.Model
 
 	focusedPane pane
@@ -90,8 +92,10 @@ func NewModel(client *registry.Client, producer *kafka.Producer) Model {
 	ti.Placeholder = "Search subjects..."
 	ti.CharLimit = 100
 
+	vp := viewport.New(40, 20)
+
 	ta := textarea.New()
-	ta.Placeholder = "Schema will appear here..."
+	ta.Placeholder = "Edit message payload..."
 	ta.ShowLineNumbers = true
 	ta.SetWidth(40)
 	ta.SetHeight(20)
@@ -105,6 +109,7 @@ func NewModel(client *registry.Client, producer *kafka.Producer) Model {
 		subjects:         []string{},
 		filteredSubjects: []string{},
 		searchInput:      ti,
+		viewer:           vp,
 		editor:           ta,
 		help:             h,
 		focusedPane:      listPane,
@@ -166,6 +171,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.viewer.Width = m.width/2 - 6
+		m.viewer.Height = m.height - 10
 		m.editor.SetWidth(m.width/2 - 6)
 		m.editor.SetHeight(m.height - 10)
 		return m, nil
@@ -190,31 +197,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rawSchema = msg.schema.Schema
 		m.schemaID = msg.schema.ID
 		m.currentSchema = registry.PrettyPrintSchema(msg.schema.Schema)
-		m.editor.SetValue(m.currentSchema)
+		m.viewer.SetContent(m.currentSchema)
+		m.viewer.GotoTop()
 		m.state = stateViewing
 		m.focusedPane = viewerPane
 		m.statusMsg = fmt.Sprintf("[VIEW] %s (v%d)", msg.schema.Subject, msg.schema.Version)
 		return m, nil
 
 	case messageSentMsg:
-		m.state = stateEditing
 		if msg.err != nil {
 			m.err = msg.err
-			m.statusMsg = "[EDIT] Send failed"
+			m.state = stateSendMode
+			m.statusMsg = "[SEND MODE] Failed - press Ctrl+S to retry"
 		} else {
-			m.statusMsg = fmt.Sprintf("Message sent to %s!", msg.topic)
-			m.copyNotify = fmt.Sprintf("Message sent to %s!", msg.topic)
+			m.state = stateViewing
+			m.editor.Blur()
+			m.statusMsg = fmt.Sprintf("SUCCESS: Message produced to topic '%s'", msg.topic)
+			m.copyNotify = fmt.Sprintf("Message produced to '%s'!", msg.topic)
 		}
 		return m, nil
 
 	case externalEditorMsg:
 		if msg.err != nil {
 			m.err = msg.err
+			m.state = stateViewing
 		} else {
 			m.editor.SetValue(msg.content)
+			topic := config.SubjectToTopic(m.selectedSubject)
+			m.state = stateSendMode
+			m.statusMsg = fmt.Sprintf("[SEND MODE] Target: %s  |  Ctrl+S to send, Esc to cancel", topic)
 		}
-		m.state = stateEditing
-		m.statusMsg = "[EDIT] " + m.selectedSubject
 		return m, nil
 
 	case tea.KeyMsg:
@@ -225,8 +237,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case stateSearching:
 			return m.handleSearchInput(msg)
-		case stateEditing:
-			return m.handleEditMode(msg)
+		case stateSendMode:
+			return m.handleSendMode(msg)
 		case stateSending:
 			// Ignore input while sending
 			return m, nil
@@ -261,15 +273,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "e":
+		case "e", "s":
 			if m.state == stateViewing && m.currentSchema != "" {
-				return m.enterEditMode()
+				return m.enterSendMode()
 			}
 			return m, nil
 
 		case "E":
 			if m.state == stateViewing && m.currentSchema != "" {
-				m.state = stateEditing
+				m.state = stateSendMode
 				m.statusMsg = "Opening external editor..."
 				return m, m.openExternalEditor()
 			}
@@ -286,7 +298,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) enterEditMode() (tea.Model, tea.Cmd) {
+func (m Model) enterSendMode() (tea.Model, tea.Cmd) {
 	// Generate template from schema
 	template, err := avro.GenerateTemplate(m.rawSchema)
 	if err != nil {
@@ -294,44 +306,46 @@ func (m Model) enterEditMode() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	topic := config.SubjectToTopic(m.selectedSubject)
 	m.editor.SetValue(template)
 	m.editor.Focus()
-	m.state = stateEditing
-	m.statusMsg = "[EDIT] " + m.selectedSubject
+	m.state = stateSendMode
+	m.statusMsg = fmt.Sprintf("[SEND MODE] Target: %s  |  Ctrl+S to send, Esc to cancel", topic)
 	return m, textarea.Blink
 }
 
-func (m Model) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+func (m Model) handleSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Check send keys first (before passing to textarea)
+	switch key {
 	case "esc":
-		// Cancel edit, return to view mode
-		m.editor.SetValue(m.currentSchema)
+		// Cancel, return to view mode
 		m.editor.Blur()
 		m.state = stateViewing
 		m.statusMsg = fmt.Sprintf("[VIEW] %s", m.selectedSubject)
 		return m, nil
 
-	case "ctrl+s", "ctrl+enter":
+	case "ctrl+s":
 		// Validate and send
 		m.state = stateSending
 		m.statusMsg = "[SENDING...] " + m.selectedSubject
 		return m, m.sendMessage()
 
 	case "y":
-		// In edit mode, copy the message content
+		// Copy the message content
 		if err := clipboard.WriteAll(m.editor.Value()); err != nil {
 			m.err = fmt.Errorf("failed to copy: %w", err)
 		} else {
 			m.copyNotify = "Message copied to clipboard!"
 		}
 		return m, nil
-
-	default:
-		// Pass to textarea
-		var cmd tea.Cmd
-		m.editor, cmd = m.editor.Update(msg)
-		return m, cmd
 	}
+
+	// Pass other keys to textarea for editing
+	var cmd tea.Cmd
+	m.editor, cmd = m.editor.Update(msg)
+	return m, cmd
 }
 
 func (m Model) handleSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -405,22 +419,10 @@ func (m Model) handleListNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleViewerNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// In view mode, only allow scrolling, not editing
-	switch msg.String() {
-	case "up", "k":
-		m.editor.CursorUp()
-	case "down", "j":
-		m.editor.CursorDown()
-	case "pgup", "ctrl+u":
-		for i := 0; i < 10; i++ {
-			m.editor.CursorUp()
-		}
-	case "pgdown", "ctrl+d":
-		for i := 0; i < 10; i++ {
-			m.editor.CursorDown()
-		}
-	}
-	return m, nil
+	// Pass all keys to viewport for scrolling
+	var cmd tea.Cmd
+	m.viewer, cmd = m.viewer.Update(msg)
+	return m, cmd
 }
 
 func (m Model) View() string {
@@ -440,7 +442,7 @@ func (m Model) View() string {
 		rightStyle = PaneStyle.Width(rightWidth)
 	} else {
 		leftStyle = PaneStyle.Width(leftWidth)
-		if m.state == stateEditing {
+		if m.state == stateSendMode {
 			rightStyle = EditPaneStyle.Width(rightWidth)
 		} else {
 			rightStyle = FocusedPaneStyle.Width(rightWidth)
@@ -519,26 +521,45 @@ func (m Model) renderList(width, height int) string {
 func (m Model) renderViewer(width, height int) string {
 	var b strings.Builder
 
-	var title string
 	switch m.state {
-	case stateEditing:
-		title = EditTitleStyle.Render("Editor [EDIT]")
+	case stateSendMode:
+		topic := config.SubjectToTopic(m.selectedSubject)
+		title := EditTitleStyle.Render("Send Mode")
+		b.WriteString(title)
+		b.WriteString("\n")
+		topicLine := fmt.Sprintf("→ Topic: %s", topic)
+		b.WriteString(SelectedItemStyle.Render(topicLine))
+		b.WriteString("\n\n")
 	case stateSending:
-		title = ListTitleStyle.Render("Editor [SENDING...]")
+		topic := config.SubjectToTopic(m.selectedSubject)
+		title := ListTitleStyle.Render("Sending...")
+		b.WriteString(title)
+		b.WriteString("\n")
+		topicLine := fmt.Sprintf("→ Topic: %s", topic)
+		b.WriteString(HelpStyle.Render(topicLine))
+		b.WriteString("\n\n")
 	default:
-		title = ListTitleStyle.Render("Schema [VIEW]")
+		title := ListTitleStyle.Render("Schema")
+		b.WriteString(title)
+		b.WriteString("\n\n")
 	}
-	b.WriteString(title)
-	b.WriteString("\n\n")
 
 	if m.currentSchema == "" {
 		b.WriteString(HelpStyle.Render("Select a subject to view its schema"))
 		return b.String()
 	}
 
-	m.editor.SetWidth(width - 2)
-	m.editor.SetHeight(height - 4)
-	b.WriteString(m.editor.View())
+	contentHeight := height - 6
+	if m.state == stateSendMode || m.state == stateSending {
+		contentHeight = height - 8 // Account for topic line
+		m.editor.SetWidth(width - 2)
+		m.editor.SetHeight(contentHeight)
+		b.WriteString(m.editor.View())
+	} else {
+		m.viewer.Width = width - 2
+		m.viewer.Height = contentHeight
+		b.WriteString(m.viewer.View())
+	}
 
 	return b.String()
 }
@@ -547,9 +568,11 @@ func (m Model) renderStatusBar() string {
 	var status string
 
 	if m.copyNotify != "" {
-		status = m.copyNotify
+		status = SuccessStyle.Render(m.copyNotify)
 	} else if m.err != nil {
 		status = ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+	} else if strings.HasPrefix(m.statusMsg, "SUCCESS:") {
+		status = SuccessStyle.Render(m.statusMsg)
 	} else if m.statusMsg != "" {
 		status = m.statusMsg
 	} else {

@@ -49,10 +49,10 @@ export KAFKA_BOOTSTRAP_SERVERS=your-broker:9092
 | `/` | Browse | Search subjects |
 | `Enter` | Browse | Select subject |
 | `Tab` | All | Switch pane focus |
-| `e` | View | Enter edit mode |
+| `s` or `e` | View | Enter send mode |
 | `E` | View | Open in `$EDITOR` |
-| `Ctrl+Enter` | Edit | Send message |
-| `Esc` | Edit | Cancel edit |
+| `Ctrl+S` | Send | Send message to Kafka |
+| `Esc` | Send | Cancel, return to view |
 | `y` | All | Copy to clipboard |
 | `q` | All | Quit |
 
