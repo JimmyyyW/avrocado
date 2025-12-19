@@ -1,0 +1,103 @@
+{
+  "type": "record",
+  "name": "PaymentEvent",
+  "namespace": "com.example.avrocado.payments",
+  "doc": "Payment event with common subtypes for testing schema references",
+  "fields": [
+    {"name": "payment_id", "type": "string", "doc": "Unique payment identifier"},
+    {"name": "merchant_id", "type": "string", "doc": "Merchant account ID"},
+    {"name": "amount", "type": {
+      "type": "record",
+      "name": "MonetaryAmount",
+      "doc": "Represents a monetary value",
+      "fields": [
+        {"name": "value", "type": "long", "doc": "Amount in smallest currency unit (cents)"},
+        {"name": "currency", "type": "string", "doc": "ISO 4217 currency code"},
+        {"name": "exponent", "type": "int", "default": 2, "doc": "Decimal exponent"}
+      ]
+    }},
+    {"name": "status", "type": {
+      "type": "enum",
+      "name": "PaymentStatus",
+      "doc": "Current payment status",
+      "symbols": ["INITIATED", "PENDING", "PROCESSING", "COMPLETED", "FAILED", "CANCELLED", "REFUNDED", "DISPUTED"]
+    }},
+    {"name": "payment_method", "type": {
+      "type": "record",
+      "name": "PaymentMethod",
+      "doc": "Payment method details",
+      "fields": [
+        {"name": "type", "type": {
+          "type": "enum",
+          "name": "PaymentMethodType",
+          "symbols": ["CARD", "BANK_ACCOUNT", "DIGITAL_WALLET", "CRYPTO", "BUY_NOW_PAY_LATER"]
+        }},
+        {"name": "card", "type": ["null", {
+          "type": "record",
+          "name": "CardDetails",
+          "fields": [
+            {"name": "brand", "type": {"type": "enum", "name": "CardBrand", "symbols": ["VISA", "MASTERCARD", "AMEX", "DISCOVER", "JCB", "UNIONPAY", "OTHER"]}},
+            {"name": "last_four", "type": "string"},
+            {"name": "exp_month", "type": "int"},
+            {"name": "exp_year", "type": "int"},
+            {"name": "funding", "type": {"type": "enum", "name": "CardFunding", "symbols": ["CREDIT", "DEBIT", "PREPAID", "UNKNOWN"]}},
+            {"name": "issuer_country", "type": ["null", "string"], "default": null}
+          ]
+        }], "default": null},
+        {"name": "bank_account", "type": ["null", {
+          "type": "record",
+          "name": "BankAccountDetails",
+          "fields": [
+            {"name": "bank_name", "type": "string"},
+            {"name": "account_type", "type": {"type": "enum", "name": "BankAccountType", "symbols": ["CHECKING", "SAVINGS"]}},
+            {"name": "last_four", "type": "string"},
+            {"name": "routing_number_last_four", "type": ["null", "string"], "default": null}
+          ]
+        }], "default": null},
+        {"name": "wallet", "type": ["null", {
+          "type": "record",
+          "name": "DigitalWalletDetails",
+          "fields": [
+            {"name": "provider", "type": {"type": "enum", "name": "WalletProvider", "symbols": ["APPLE_PAY", "GOOGLE_PAY", "PAYPAL", "VENMO", "SAMSUNG_PAY", "OTHER"]}},
+            {"name": "email", "type": ["null", "string"], "default": null}
+          ]
+        }], "default": null}
+      ]
+    }},
+    {"name": "billing_address", "type": ["null", {
+      "type": "record",
+      "name": "BillingAddress",
+      "fields": [
+        {"name": "line1", "type": "string"},
+        {"name": "line2", "type": ["null", "string"], "default": null},
+        {"name": "city", "type": "string"},
+        {"name": "state", "type": ["null", "string"], "default": null},
+        {"name": "postal_code", "type": "string"},
+        {"name": "country", "type": "string"}
+      ]
+    }], "default": null},
+    {"name": "risk_assessment", "type": {
+      "type": "record",
+      "name": "RiskAssessment",
+      "doc": "Fraud and risk scoring",
+      "fields": [
+        {"name": "score", "type": "int", "doc": "Risk score 0-100"},
+        {"name": "level", "type": {"type": "enum", "name": "RiskLevel", "symbols": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]}},
+        {"name": "factors", "type": {"type": "array", "items": "string"}, "default": []},
+        {"name": "requires_review", "type": "boolean", "default": false}
+      ]
+    }},
+    {"name": "timestamps", "type": {
+      "type": "record",
+      "name": "PaymentTimestamps",
+      "fields": [
+        {"name": "created_at", "type": "long"},
+        {"name": "updated_at", "type": "long"},
+        {"name": "authorized_at", "type": ["null", "long"], "default": null},
+        {"name": "captured_at", "type": ["null", "long"], "default": null},
+        {"name": "completed_at", "type": ["null", "long"], "default": null}
+      ]
+    }},
+    {"name": "metadata", "type": {"type": "map", "values": "string"}, "doc": "Custom metadata"}
+  ]
+}

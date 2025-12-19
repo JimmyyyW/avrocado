@@ -1,0 +1,122 @@
+{
+  "type": "record",
+  "name": "Order",
+  "namespace": "com.example.avrocado",
+  "doc": "A deeply nested order record for testing complex schema rendering",
+  "fields": [
+    {"name": "order_id", "type": "string"},
+    {"name": "customer", "type": {
+      "type": "record",
+      "name": "Customer",
+      "fields": [
+        {"name": "customer_id", "type": "string"},
+        {"name": "name", "type": "string"},
+        {"name": "contact", "type": {
+          "type": "record",
+          "name": "ContactInfo",
+          "fields": [
+            {"name": "email", "type": "string"},
+            {"name": "phone", "type": ["null", "string"], "default": null},
+            {"name": "address", "type": {
+              "type": "record",
+              "name": "Address",
+              "fields": [
+                {"name": "street", "type": "string"},
+                {"name": "city", "type": "string"},
+                {"name": "state", "type": "string"},
+                {"name": "zip", "type": "string"},
+                {"name": "country", "type": "string"},
+                {"name": "geo", "type": {
+                  "type": "record",
+                  "name": "GeoLocation",
+                  "fields": [
+                    {"name": "latitude", "type": "double"},
+                    {"name": "longitude", "type": "double"},
+                    {"name": "accuracy_meters", "type": ["null", "float"], "default": null}
+                  ]
+                }}
+              ]
+            }}
+          ]
+        }}
+      ]
+    }},
+    {"name": "items", "type": {
+      "type": "array",
+      "items": {
+        "type": "record",
+        "name": "OrderItem",
+        "fields": [
+          {"name": "sku", "type": "string"},
+          {"name": "name", "type": "string"},
+          {"name": "quantity", "type": "int"},
+          {"name": "unit_price", "type": {
+            "type": "record",
+            "name": "Money",
+            "fields": [
+              {"name": "amount", "type": "long", "doc": "Amount in cents"},
+              {"name": "currency", "type": "string"}
+            ]
+          }},
+          {"name": "discounts", "type": {
+            "type": "array",
+            "items": {
+              "type": "record",
+              "name": "Discount",
+              "fields": [
+                {"name": "code", "type": "string"},
+                {"name": "type", "type": {"type": "enum", "name": "DiscountType", "symbols": ["PERCENTAGE", "FIXED_AMOUNT"]}},
+                {"name": "value", "type": "long"}
+              ]
+            }
+          }}
+        ]
+      }
+    }},
+    {"name": "shipping", "type": {
+      "type": "record",
+      "name": "ShippingInfo",
+      "fields": [
+        {"name": "method", "type": {"type": "enum", "name": "ShippingMethod", "symbols": ["STANDARD", "EXPRESS", "OVERNIGHT", "PICKUP"]}},
+        {"name": "address", "type": "Address"},
+        {"name": "tracking", "type": ["null", {
+          "type": "record",
+          "name": "TrackingInfo",
+          "fields": [
+            {"name": "carrier", "type": "string"},
+            {"name": "tracking_number", "type": "string"},
+            {"name": "estimated_delivery", "type": ["null", "long"], "default": null}
+          ]
+        }], "default": null}
+      ]
+    }},
+    {"name": "payment", "type": {
+      "type": "record",
+      "name": "PaymentInfo",
+      "fields": [
+        {"name": "method", "type": {"type": "enum", "name": "PaymentMethod", "symbols": ["CREDIT_CARD", "DEBIT_CARD", "PAYPAL", "BANK_TRANSFER", "CRYPTO"]}},
+        {"name": "status", "type": {"type": "enum", "name": "PaymentStatus", "symbols": ["PENDING", "AUTHORIZED", "CAPTURED", "FAILED", "REFUNDED"]}},
+        {"name": "total", "type": "Money"},
+        {"name": "transactions", "type": {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "Transaction",
+            "fields": [
+              {"name": "transaction_id", "type": "string"},
+              {"name": "timestamp", "type": "long"},
+              {"name": "amount", "type": "Money"},
+              {"name": "type", "type": {"type": "enum", "name": "TransactionType", "symbols": ["CHARGE", "REFUND", "CHARGEBACK"]}}
+            ]
+          }
+        }}
+      ]
+    }},
+    {"name": "metadata", "type": {
+      "type": "map",
+      "values": "string"
+    }},
+    {"name": "created_at", "type": "long"},
+    {"name": "updated_at", "type": "long"}
+  ]
+}

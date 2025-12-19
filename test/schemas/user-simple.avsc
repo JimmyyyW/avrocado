@@ -1,0 +1,13 @@
+{
+  "type": "record",
+  "name": "User",
+  "namespace": "com.example.avrocado",
+  "doc": "A simple user record for basic testing",
+  "fields": [
+    {"name": "id", "type": "string", "doc": "Unique user identifier"},
+    {"name": "email", "type": "string", "doc": "User email address"},
+    {"name": "name", "type": "string", "doc": "Full name"},
+    {"name": "created_at", "type": "long", "doc": "Unix timestamp of creation"},
+    {"name": "active", "type": "boolean", "doc": "Whether user is active"}
+  ]
+}
