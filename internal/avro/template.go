@@ -5,6 +5,12 @@ import (
 	"fmt"
 )
 
+// templateGenerator holds state while generating a template,
+// including a registry of named types encountered during parsing.
+type templateGenerator struct {
+	namedTypes map[string]map[string]interface{}
+}
+
 // GenerateTemplate creates a JSON template from an Avro schema.
 // The template contains placeholder values for each field.
 func GenerateTemplate(schemaJSON string) (string, error) {
@@ -13,7 +19,15 @@ func GenerateTemplate(schemaJSON string) (string, error) {
 		return "", fmt.Errorf("parsing schema: %w", err)
 	}
 
-	result, err := generateValue(schema)
+	gen := &templateGenerator{
+		namedTypes: make(map[string]map[string]interface{}),
+	}
+
+	// First pass: collect all named types
+	gen.collectNamedTypes(schema)
+
+	// Second pass: generate the template
+	result, err := gen.generateValue(schema)
 	if err != nil {
 		return "", err
 	}
@@ -26,20 +40,69 @@ func GenerateTemplate(schemaJSON string) (string, error) {
 	return string(pretty), nil
 }
 
-func generateValue(schema interface{}) (interface{}, error) {
+// collectNamedTypes recursively finds and registers all named types in the schema
+func (g *templateGenerator) collectNamedTypes(schema interface{}) {
+	switch s := schema.(type) {
+	case map[string]interface{}:
+		// Check if this is a named type (record, enum, fixed)
+		if typeName, ok := s["type"].(string); ok {
+			switch typeName {
+			case "record", "enum", "fixed":
+				if name, ok := s["name"].(string); ok {
+					// Register with full name if namespace exists
+					fullName := name
+					if ns, ok := s["namespace"].(string); ok {
+						fullName = ns + "." + name
+					}
+					g.namedTypes[name] = s
+					g.namedTypes[fullName] = s
+				}
+			}
+		}
+
+		// Recurse into fields
+		if fields, ok := s["fields"].([]interface{}); ok {
+			for _, f := range fields {
+				if field, ok := f.(map[string]interface{}); ok {
+					if fieldType, ok := field["type"]; ok {
+						g.collectNamedTypes(fieldType)
+					}
+				}
+			}
+		}
+
+		// Recurse into array items
+		if items, ok := s["items"]; ok {
+			g.collectNamedTypes(items)
+		}
+
+		// Recurse into map values
+		if values, ok := s["values"]; ok {
+			g.collectNamedTypes(values)
+		}
+
+	case []interface{}:
+		// Union type - recurse into each option
+		for _, t := range s {
+			g.collectNamedTypes(t)
+		}
+	}
+}
+
+func (g *templateGenerator) generateValue(schema interface{}) (interface{}, error) {
 	switch s := schema.(type) {
 	case string:
-		return generatePrimitive(s)
+		return g.generatePrimitive(s)
 	case []interface{}:
-		return generateUnion(s)
+		return g.generateUnion(s)
 	case map[string]interface{}:
-		return generateComplex(s)
+		return g.generateComplex(s)
 	default:
 		return nil, fmt.Errorf("unexpected schema type: %T", schema)
 	}
 }
 
-func generatePrimitive(typeName string) (interface{}, error) {
+func (g *templateGenerator) generatePrimitive(typeName string) (interface{}, error) {
 	switch typeName {
 	case "null":
 		return nil, nil
@@ -54,24 +117,28 @@ func generatePrimitive(typeName string) (interface{}, error) {
 	case "string":
 		return "", nil
 	default:
-		// Named type reference, return empty string as placeholder
+		// Named type reference - look it up
+		if namedType, ok := g.namedTypes[typeName]; ok {
+			return g.generateComplex(namedType)
+		}
+		// Unknown type, return empty string
 		return "", nil
 	}
 }
 
-func generateUnion(types []interface{}) (interface{}, error) {
+func (g *templateGenerator) generateUnion(types []interface{}) (interface{}, error) {
 	// For unions, prefer the first non-null type
 	// If all are null, return null
 	for _, t := range types {
 		if str, ok := t.(string); ok && str == "null" {
 			continue
 		}
-		return generateValue(t)
+		return g.generateValue(t)
 	}
 	return nil, nil
 }
 
-func generateComplex(schema map[string]interface{}) (interface{}, error) {
+func (g *templateGenerator) generateComplex(schema map[string]interface{}) (interface{}, error) {
 	schemaType, ok := schema["type"].(string)
 	if !ok {
 		return nil, fmt.Errorf("missing or invalid 'type' field")
@@ -79,22 +146,22 @@ func generateComplex(schema map[string]interface{}) (interface{}, error) {
 
 	switch schemaType {
 	case "record":
-		return generateRecord(schema)
+		return g.generateRecord(schema)
 	case "array":
-		return generateArray(schema)
+		return g.generateArray(schema)
 	case "map":
-		return generateMap(schema)
+		return g.generateMap(schema)
 	case "enum":
-		return generateEnum(schema)
+		return g.generateEnum(schema)
 	case "fixed":
-		return generateFixed(schema)
+		return g.generateFixed(schema)
 	default:
 		// Primitive type in complex form
-		return generatePrimitive(schemaType)
+		return g.generatePrimitive(schemaType)
 	}
 }
 
-func generateRecord(schema map[string]interface{}) (interface{}, error) {
+func (g *templateGenerator) generateRecord(schema map[string]interface{}) (interface{}, error) {
 	fields, ok := schema["fields"].([]interface{})
 	if !ok {
 		return nil, fmt.Errorf("record missing 'fields'")
@@ -124,7 +191,7 @@ func generateRecord(schema map[string]interface{}) (interface{}, error) {
 			continue
 		}
 
-		val, err := generateValue(fieldType)
+		val, err := g.generateValue(fieldType)
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", name, err)
 		}
@@ -134,17 +201,17 @@ func generateRecord(schema map[string]interface{}) (interface{}, error) {
 	return result, nil
 }
 
-func generateArray(schema map[string]interface{}) (interface{}, error) {
+func (g *templateGenerator) generateArray(schema map[string]interface{}) (interface{}, error) {
 	// Return empty array
 	return []interface{}{}, nil
 }
 
-func generateMap(schema map[string]interface{}) (interface{}, error) {
+func (g *templateGenerator) generateMap(schema map[string]interface{}) (interface{}, error) {
 	// Return empty map
 	return map[string]interface{}{}, nil
 }
 
-func generateEnum(schema map[string]interface{}) (interface{}, error) {
+func (g *templateGenerator) generateEnum(schema map[string]interface{}) (interface{}, error) {
 	symbols, ok := schema["symbols"].([]interface{})
 	if !ok || len(symbols) == 0 {
 		return "", nil
@@ -156,7 +223,7 @@ func generateEnum(schema map[string]interface{}) (interface{}, error) {
 	return "", nil
 }
 
-func generateFixed(schema map[string]interface{}) (interface{}, error) {
+func (g *templateGenerator) generateFixed(schema map[string]interface{}) (interface{}, error) {
 	// Return empty string for fixed bytes
 	return "", nil
 }
