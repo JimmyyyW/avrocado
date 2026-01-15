@@ -14,6 +14,7 @@ configurations:
     name: "Local Test Environment"
     schema_registry:
       url: http://localhost:8081
+      auth_method: none
     kafka:
       bootstrap_servers: localhost:9092
       security_protocol: PLAINTEXT

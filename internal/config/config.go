@@ -126,7 +126,8 @@ func CreateDefaultConfig(path string) error {
 			"local": {
 				Name: "Local Development",
 				SchemaRegistry: SchemaRegistryConfig{
-					URL: "http://localhost:8081",
+					URL:        "http://localhost:8081",
+					AuthMethod: "none",
 				},
 				Kafka: KafkaConfig{
 					BootstrapServers: "localhost:9092",
