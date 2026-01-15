@@ -2,11 +2,13 @@ package kafka
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"github.com/segmentio/kafka-go/sasl/plain"
 
 	"github.com/JimmyyyW/avrocado/internal/config"
 )
@@ -22,6 +24,29 @@ func NewProducer(cfg *config.Config) (*Producer, error) {
 		return nil, fmt.Errorf("KAFKA_BOOTSTRAP_SERVERS not configured")
 	}
 
+	// Create dialer with optional SASL/TLS support
+	dialer := &kafka.Dialer{
+		Timeout:   10 * time.Second,
+		DualStack: true,
+	}
+
+	// Configure SASL_SSL if needed
+	if cfg.KafkaSecurityProtocol == "SASL_SSL" {
+		// Configure TLS with system CA certificates
+		dialer.TLS = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+
+		// Configure SASL PLAIN mechanism (for Confluent Cloud)
+		if cfg.KafkaSASLUsername != "" && cfg.KafkaSASLPassword != "" {
+			dialer.SASLMechanism = plain.Mechanism{
+				Username: cfg.KafkaSASLUsername,
+				Password: cfg.KafkaSASLPassword,
+			}
+		}
+	}
+
+	// Create writer with configured dialer
 	writer := &kafka.Writer{
 		Addr:         kafka.TCP(cfg.KafkaBootstrapServers),
 		Balancer:     &kafka.LeastBytes{},
@@ -29,8 +54,12 @@ func NewProducer(cfg *config.Config) (*Producer, error) {
 		RequiredAcks: kafka.RequireOne,
 	}
 
-	// TODO: Add SASL support when security protocol is SASL_SSL or SASL_PLAINTEXT
-	// This would require configuring the Dialer with SASL mechanism
+	// If we have a dialer with special config, use transport
+	if dialer.TLS != nil || dialer.SASLMechanism != nil {
+		writer.Transport = &kafka.Transport{
+			Dial: dialer.DialFunc,
+		}
+	}
 
 	return &Producer{writer: writer}, nil
 }
