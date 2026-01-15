@@ -199,6 +199,23 @@ func (m ConfigSelectorModel) View() string {
 		}
 	}
 
+	// Show preview of selected profile
+	if m.selectedIdx >= 0 && m.selectedIdx < len(m.profiles) {
+		profileName := m.profiles[m.selectedIdx]
+		if profile, err := m.configFile.GetProfile(profileName); err == nil {
+			s += "\n" + lipgloss.NewStyle().Bold(true).Render("Profile Details:") + "\n"
+			s += "  Schema Registry: " + profile.SchemaRegistry.URL + "\n"
+			s += "  Kafka Bootstrap: " + profile.Kafka.BootstrapServers + "\n"
+			s += "  Security Protocol: " + profile.Kafka.SecurityProtocol + "\n"
+			if profile.SchemaRegistry.APIKey != "" {
+				s += "  Schema Registry Auth: Yes\n"
+			}
+			if profile.Kafka.SASLUsername != "" {
+				s += "  Kafka Auth: Yes (" + profile.Kafka.SASLMechanism + ")\n"
+			}
+		}
+	}
+
 	s += "\n"
 	if m.message != "" {
 		s += lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("✓ "+m.message) + "\n\n"
