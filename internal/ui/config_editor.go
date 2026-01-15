@@ -38,12 +38,15 @@ func NewConfigEditor(configFile *config.ConfigFile) ConfigEditorModel {
 		fields: []formField{
 			{label: "Profile Name", value: "", placeholder: "e.g., local, production"},
 			{label: "Schema Registry URL", value: "", placeholder: "http://localhost:8081"},
-			{label: "Schema Registry API Key", value: "", placeholder: "(optional)"},
-			{label: "Schema Registry API Secret", value: "", placeholder: "(optional)", masked: true},
+			{label: "Schema Registry Auth", value: "none", placeholder: "none|basic|sasl"},
+			{label: "Schema Registry API Key", value: "", placeholder: "(for basic auth)", hidden: true},
+			{label: "Schema Registry API Secret", value: "", placeholder: "(for basic auth)", masked: true, hidden: true},
+			{label: "Schema Registry SASL Username", value: "", placeholder: "(for sasl auth)", hidden: true},
+			{label: "Schema Registry SASL Password", value: "", placeholder: "(for sasl auth)", masked: true, hidden: true},
 			{label: "Kafka Bootstrap Servers", value: "", placeholder: "localhost:9092"},
-			{label: "Security Protocol", value: "PLAINTEXT", placeholder: "PLAINTEXT|SASL_SSL"},
-			{label: "SASL Username", value: "", placeholder: "(optional for SASL_SSL)", hidden: true},
-			{label: "SASL Password", value: "", placeholder: "(optional for SASL_SSL)", masked: true, hidden: true},
+			{label: "Kafka Security Protocol", value: "PLAINTEXT", placeholder: "PLAINTEXT|SASL_SSL"},
+			{label: "Kafka SASL Username", value: "", placeholder: "(for SASL_SSL)", hidden: true},
+			{label: "Kafka SASL Password", value: "", placeholder: "(for SASL_SSL)", masked: true, hidden: true},
 		},
 	}
 }
@@ -57,17 +60,44 @@ func NewConfigEditorForProfile(configFile *config.ConfigFile, profileName string
 	if profile, err := configFile.GetProfile(profileName); err == nil {
 		m.fields[0].value = profile.Name
 		m.fields[1].value = profile.SchemaRegistry.URL
-		m.fields[2].value = profile.SchemaRegistry.APIKey
-		m.fields[3].value = profile.SchemaRegistry.APISecret
-		m.fields[4].value = profile.Kafka.BootstrapServers
-		m.fields[5].value = profile.Kafka.SecurityProtocol
-		m.fields[6].value = profile.Kafka.SASLUsername
-		m.fields[7].value = profile.Kafka.SASLPassword
 
-		// Show SASL fields if SASL_SSL is selected
-		if profile.Kafka.SecurityProtocol == "SASL_SSL" {
+		// Set auth method
+		authMethod := profile.SchemaRegistry.AuthMethod
+		if authMethod == "" {
+			// Infer from old config format
+			if profile.SchemaRegistry.APIKey != "" {
+				authMethod = "basic"
+			} else {
+				authMethod = "none"
+			}
+		}
+		m.fields[2].value = authMethod
+
+		// Load schema registry credentials
+		m.fields[3].value = profile.SchemaRegistry.APIKey
+		m.fields[4].value = profile.SchemaRegistry.APISecret
+		m.fields[5].value = profile.SchemaRegistry.SASLUsername
+		m.fields[6].value = profile.SchemaRegistry.SASLPassword
+
+		// Load kafka settings
+		m.fields[7].value = profile.Kafka.BootstrapServers
+		m.fields[8].value = profile.Kafka.SecurityProtocol
+		m.fields[9].value = profile.Kafka.SASLUsername
+		m.fields[10].value = profile.Kafka.SASLPassword
+
+		// Update field visibility based on auth methods
+		if authMethod == "basic" {
+			m.fields[3].hidden = false
+			m.fields[4].hidden = false
+		} else if authMethod == "sasl" {
+			m.fields[5].hidden = false
 			m.fields[6].hidden = false
-			m.fields[7].hidden = false
+		}
+
+		// Show Kafka SASL fields if SASL_SSL is selected
+		if profile.Kafka.SecurityProtocol == "SASL_SSL" {
+			m.fields[9].hidden = false
+			m.fields[10].hidden = false
 		}
 	}
 
@@ -133,14 +163,34 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fields[m.focusedIdx].value = ""
 			}
 
-			// Update hidden fields based on security protocol
-			if m.focusedIdx == 5 { // Security Protocol field
-				if m.fields[5].value == "SASL_SSL" {
-					m.fields[6].hidden = false
-					m.fields[7].hidden = false
-				} else if m.fields[5].value == "PLAINTEXT" {
+			// Update hidden fields based on schema registry auth method
+			if m.focusedIdx == 2 { // Schema Registry Auth field
+				if m.fields[2].value == "basic" {
+					m.fields[3].hidden = false
+					m.fields[4].hidden = false
+					m.fields[5].hidden = true
 					m.fields[6].hidden = true
-					m.fields[7].hidden = true
+				} else if m.fields[2].value == "sasl" {
+					m.fields[3].hidden = true
+					m.fields[4].hidden = true
+					m.fields[5].hidden = false
+					m.fields[6].hidden = false
+				} else { // none
+					m.fields[3].hidden = true
+					m.fields[4].hidden = true
+					m.fields[5].hidden = true
+					m.fields[6].hidden = true
+				}
+			}
+
+			// Update hidden fields based on kafka security protocol
+			if m.focusedIdx == 8 { // Kafka Security Protocol field
+				if m.fields[8].value == "SASL_SSL" {
+					m.fields[9].hidden = false
+					m.fields[10].hidden = false
+				} else if m.fields[8].value == "PLAINTEXT" {
+					m.fields[9].hidden = true
+					m.fields[10].hidden = true
 				}
 			}
 		}
@@ -223,24 +273,37 @@ func (m *ConfigEditorModel) saveProfile() error {
 		return fmt.Errorf("schema registry URL is required")
 	}
 
-	kafkaServers := m.fields[4].value
+	kafkaServers := m.fields[7].value
 	if kafkaServers == "" {
 		return fmt.Errorf("kafka bootstrap servers is required")
 	}
 
+	// Build schema registry config
+	srAuthMethod := m.fields[2].value
+	srConfig := config.SchemaRegistryConfig{
+		URL:        srURL,
+		AuthMethod: srAuthMethod,
+	}
+
+	// Load auth credentials based on method
+	if srAuthMethod == "basic" {
+		srConfig.APIKey = m.fields[3].value
+		srConfig.APISecret = m.fields[4].value
+	} else if srAuthMethod == "sasl" {
+		srConfig.SASLUsername = m.fields[5].value
+		srConfig.SASLPassword = m.fields[6].value
+		srConfig.SecurityProtocol = "SASL_SSL"
+	}
+
 	// Create profile config
 	profile := &config.ProfileConfig{
-		Name: profileName,
-		SchemaRegistry: config.SchemaRegistryConfig{
-			URL:       srURL,
-			APIKey:    m.fields[2].value,
-			APISecret: m.fields[3].value,
-		},
+		Name:           profileName,
+		SchemaRegistry: srConfig,
 		Kafka: config.KafkaConfig{
 			BootstrapServers: kafkaServers,
-			SecurityProtocol: m.fields[5].value,
-			SASLUsername:     m.fields[6].value,
-			SASLPassword:     m.fields[7].value,
+			SecurityProtocol: m.fields[8].value,
+			SASLUsername:     m.fields[9].value,
+			SASLPassword:     m.fields[10].value,
 		},
 	}
 

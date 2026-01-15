@@ -39,9 +39,13 @@ type ProfileConfig struct {
 
 // SchemaRegistryConfig holds Schema Registry settings
 type SchemaRegistryConfig struct {
-	URL       string `yaml:"url"`
-	APIKey    string `yaml:"api_key,omitempty"`
-	APISecret string `yaml:"api_secret,omitempty"`
+	URL              string `yaml:"url"`
+	AuthMethod       string `yaml:"auth_method,omitempty"` // "none", "basic", "sasl"
+	APIKey           string `yaml:"api_key,omitempty"`     // For basic auth
+	APISecret        string `yaml:"api_secret,omitempty"`  // For basic auth
+	SASLUsername     string `yaml:"sasl_username,omitempty"`
+	SASLPassword     string `yaml:"sasl_password,omitempty"`
+	SecurityProtocol string `yaml:"security_protocol,omitempty"` // For SASL connections
 }
 
 // KafkaConfig holds Kafka settings
