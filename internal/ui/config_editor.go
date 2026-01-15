@@ -258,6 +258,7 @@ func (m ConfigEditorModel) View() string {
 	}
 
 	s += lipgloss.NewStyle().Faint(true).Render(buttonText) + "\n"
+	s += lipgloss.NewStyle().Faint(true).Render("Tip: Paste long values (Cmd+V / Ctrl+Shift+V)") + "\n"
 
 	return s
 }
