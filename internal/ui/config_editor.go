@@ -26,6 +26,7 @@ type ConfigEditorModel struct {
 	height      int
 	err         string
 	saved       bool
+	quit        bool
 	isNewConfig bool
 }
 
@@ -82,7 +83,9 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
-			return m, tea.Quit
+			// Cancel editing
+			m.quit = true
+			return m, nil
 		case "tab":
 			// Move to next visible field
 			for i := 0; i < len(m.fields); i++ {
@@ -106,7 +109,8 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.err = err.Error()
 				} else {
 					m.saved = true
-					return m, tea.Quit
+					m.quit = true
+					return m, nil
 				}
 			} else {
 				// Move to next field
@@ -148,16 +152,19 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ConfigEditorModel) View() string {
-	if m.saved {
-		return "Configuration saved successfully!\n"
-	}
-
 	var s string
 	title := "New Configuration"
 	if !m.isNewConfig {
 		title = fmt.Sprintf("Edit Configuration: %s", m.profileName)
 	}
 	s += lipgloss.NewStyle().Bold(true).Render(title) + "\n\n"
+
+	visibleFieldCount := 0
+	for _, field := range m.fields {
+		if !field.hidden {
+			visibleFieldCount++
+		}
+	}
 
 	for i, field := range m.fields {
 		if field.hidden {
@@ -193,11 +200,14 @@ func (m ConfigEditorModel) View() string {
 	}
 
 	s += "\n"
-	s += lipgloss.NewStyle().Faint(true).Render("[tab] Next  [shift+tab] Prev  [enter] Save  [esc] Cancel") + "\n"
 
+	// Determine what button text to show
+	buttonText := "[tab] Next  [shift+tab] Prev  [enter] Save  [esc] Cancel"
 	if m.err != "" {
-		s += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("Error: "+m.err) + "\n"
+		s += lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("✗ Error: "+m.err) + "\n\n"
 	}
+
+	s += lipgloss.NewStyle().Faint(true).Render(buttonText) + "\n"
 
 	return s
 }
