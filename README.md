@@ -131,7 +131,7 @@ export KAFKA_BOOTSTRAP_SERVERS=your-broker:9092
 |-----|--------|
 | `Ctrl+S` | Send message to Kafka |
 | `Ctrl+N` | Save current message as event |
-| `Ctrl+L` | Load previously saved message |
+| `Ctrl+O` | Load previously saved message |
 | `y` | Copy message to clipboard |
 | `Esc` | Cancel, return to view |
 

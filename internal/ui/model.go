@@ -321,7 +321,7 @@ func (m Model) enterSendMode() (tea.Model, tea.Cmd) {
 	m.editor.SetValue(template)
 	m.editor.Focus()
 	m.state = stateSendMode
-	m.statusMsg = fmt.Sprintf("[SEND MODE] Target: %s  |  Ctrl+S send, Ctrl+N save, Ctrl+L load, Esc cancel", topic)
+	m.statusMsg = fmt.Sprintf("[SEND MODE] Target: %s  |  Ctrl+S send, Ctrl+N save, Ctrl+O load, Esc cancel", topic)
 	return m, textarea.Blink
 }
 
@@ -353,8 +353,8 @@ func (m Model) handleSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusMsg = "[SAVE EVENT]"
 		return m, nil
 
-	case "ctrl+l":
-		// Load saved message
+	case "ctrl+o":
+		// Load saved message (Ctrl+L was intercepted by terminal)
 		topic := config.SubjectToTopic(m.selectedSubject)
 		m.eventLoader = NewEventLoader(topic)
 		m.state = stateLoadingEvent
