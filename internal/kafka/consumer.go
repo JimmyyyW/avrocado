@@ -55,12 +55,13 @@ func NewConsumer(cfg *config.Config, topic string) (*Consumer, error) {
 
 	// Create reader with configured dialer
 	// Start from offset 0 (beginning of topic)
+	// Note: We don't use a consumer group here because we want to browse
+	// historical messages from the beginning, not manage group offsets
 	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:        []string{cfg.KafkaBootstrapServers},
-		Topic:          topic,
-		Dialer:         dialer,
-		StartOffset:    0, // Read from the beginning
-		CommitInterval: time.Second,
+		Brokers:     []string{cfg.KafkaBootstrapServers},
+		Topic:       topic,
+		Dialer:      dialer,
+		StartOffset: 0, // Read from the beginning
 	})
 
 	return &Consumer{reader: reader}, nil
