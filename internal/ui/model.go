@@ -475,7 +475,7 @@ func (m *Model) enterConsumerMode() (tea.Model, tea.Cmd) {
 	// Create consumer
 	consumer, err := kafka.NewConsumer(m.cfg, topic)
 	if err != nil {
-		m.err = fmt.Errorf("creating consumer: %w", err)
+		m.err = fmt.Errorf("[DEBUG] Failed to create consumer for topic %s: %w", topic, err)
 		return m, nil
 	}
 
@@ -484,6 +484,8 @@ func (m *Model) enterConsumerMode() (tea.Model, tea.Cmd) {
 	m.currentMsgIdx = 0
 	m.state = stateConsumerMode
 	m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Topic: %s  |  Ctrl+M consume, Esc cancel, j/k navigate", topic)
+	m.err = fmt.Errorf("[DEBUG] Consumer created for topic: %s | Bootstrap: %s | Security: %s | Press Ctrl+M to fetch messages",
+		topic, m.cfg.KafkaBootstrapServers, m.cfg.KafkaSecurityProtocol)
 	return m, nil
 }
 
@@ -505,23 +507,32 @@ func (m *Model) handleConsumerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+m":
 		// Consume messages
+		topic := config.SubjectToTopic(m.selectedSubject)
+		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetching from topic: %s (timeout: 5s)", topic)
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		messages, err := m.consumer.FetchMessages(ctx, 10)
 		if err != nil {
-			m.err = fmt.Errorf("consuming messages: %w", err)
+			// Surface detailed error information
+			m.err = fmt.Errorf("[DEBUG] Topic: %s | Consumer error: %w", topic, err)
+			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] ERROR - Check error area above. Topic: %s", topic)
 			return m, nil
 		}
 
 		if len(messages) == 0 {
-			m.statusMsg = "[CONSUMER MODE] No messages available"
+			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] No messages available | Topic: %s | Bootstrap: %s | Protocol: %s",
+				topic, m.cfg.KafkaBootstrapServers, m.cfg.KafkaSecurityProtocol)
+			m.err = fmt.Errorf("[DEBUG] Fetch returned 0 messages for topic %s. This means either: (1) topic has no messages, (2) consumer started reading from end instead of beginning, or (3) connection issue", topic)
 			return m, nil
 		}
 
+		// Success - show what we fetched
 		m.consumedMessages = messages
 		m.currentMsgIdx = 0
-		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetched %d messages. Showing 1/%d", len(messages), len(messages))
+		debugMsg := fmt.Sprintf("[DEBUG] Successfully fetched %d messages from topic: %s", len(messages), topic)
+		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetched %d messages. Showing 1/%d | %s", len(messages), len(messages), debugMsg)
 		return m, nil
 
 	case "j", "down":
