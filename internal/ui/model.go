@@ -37,6 +37,8 @@ const (
 	stateViewing
 	stateSendMode
 	stateSending
+	stateSavingEvent
+	stateLoadingEvent
 )
 
 type Model struct {
@@ -65,6 +67,11 @@ type Model struct {
 	err        error
 	statusMsg  string
 	copyNotify string
+
+	// Event persistence
+	lastPayload string
+	eventSaver  EventSaverModel
+	eventLoader EventLoaderModel
 }
 
 type subjectsLoadedMsg struct {
@@ -242,6 +249,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case stateSending:
 			// Ignore input while sending
 			return m, nil
+		case stateSavingEvent:
+			return m.handleSavingEvent(msg)
+		case stateLoadingEvent:
+			return m.handleLoadingEvent(msg)
 		}
 
 		// Global keybindings
@@ -310,7 +321,7 @@ func (m Model) enterSendMode() (tea.Model, tea.Cmd) {
 	m.editor.SetValue(template)
 	m.editor.Focus()
 	m.state = stateSendMode
-	m.statusMsg = fmt.Sprintf("[SEND MODE] Target: %s  |  Ctrl+S to send, Esc to cancel", topic)
+	m.statusMsg = fmt.Sprintf("[SEND MODE] Target: %s  |  Ctrl+S send, Ctrl+N save, Ctrl+L load, Esc cancel", topic)
 	return m, textarea.Blink
 }
 
@@ -327,10 +338,28 @@ func (m Model) handleSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "ctrl+s":
+		// Save the last payload before sending
+		m.lastPayload = m.editor.Value()
 		// Validate and send
 		m.state = stateSending
 		m.statusMsg = "[SENDING...] " + m.selectedSubject
 		return m, m.sendMessage()
+
+	case "ctrl+n":
+		// Save current message
+		topic := config.SubjectToTopic(m.selectedSubject)
+		m.eventSaver = NewEventSaver(topic, m.schemaID, m.editor.Value())
+		m.state = stateSavingEvent
+		m.statusMsg = "[SAVE EVENT]"
+		return m, nil
+
+	case "ctrl+l":
+		// Load saved message
+		topic := config.SubjectToTopic(m.selectedSubject)
+		m.eventLoader = NewEventLoader(topic)
+		m.state = stateLoadingEvent
+		m.statusMsg = "[LOAD EVENT]"
+		return m, nil
 
 	case "y":
 		// Copy the message content
@@ -345,6 +374,38 @@ func (m Model) handleSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Pass other keys to textarea for editing
 	var cmd tea.Cmd
 	m.editor, cmd = m.editor.Update(msg)
+	return m, cmd
+}
+
+func (m *Model) handleSavingEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	newModel, cmd := m.eventSaver.Update(msg)
+	m.eventSaver = newModel.(EventSaverModel)
+
+	if m.eventSaver.quit {
+		if m.eventSaver.Saved() {
+			m.statusMsg = fmt.Sprintf("[SEND MODE] Saved: %s", m.eventSaver.FilePath())
+		}
+		m.state = stateSendMode
+	}
+
+	return m, cmd
+}
+
+func (m *Model) handleLoadingEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	newModel, cmd := m.eventLoader.Update(msg)
+	m.eventLoader = newModel.(EventLoaderModel)
+
+	if m.eventLoader.Quit() {
+		event := m.eventLoader.LoadedEvent()
+		if event != nil {
+			m.editor.SetValue(event.Payload)
+			m.statusMsg = fmt.Sprintf("[SEND MODE] Loaded: %s", event.Name)
+		}
+		m.state = stateSendMode
+	}
+
 	return m, cmd
 }
 
@@ -428,6 +489,14 @@ func (m Model) handleViewerNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
+	}
+
+	// Handle event saving/loading overlays
+	if m.state == stateSavingEvent {
+		return m.eventSaver.View()
+	}
+	if m.state == stateLoadingEvent {
+		return m.eventLoader.View()
 	}
 
 	leftWidth := m.width / 3
