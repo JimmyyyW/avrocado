@@ -8,6 +8,7 @@ A terminal-based schema registry browser and message producer built with Go, Bub
 - **YAML Configuration**: Store settings at `~/.config/avrocado/config.yaml`
 - **Schema Registry Browsing**: Search and view Avro schemas with syntax highlighting
 - **Message Production**: Edit and produce messages to Kafka topics
+- **Message Consumption**: Browse and navigate Kafka messages from topics
 - **Event Persistence**: Save and load previously sent messages per topic
 - **Authentication Support**:
   - Schema Registry: Basic auth or SASL/PLAIN
@@ -122,9 +123,18 @@ export KAFKA_BOOTSTRAP_SERVERS=your-broker:9092
 |-----|--------|
 | `j/k` or `↑/↓` | Scroll schema |
 | `s` or `e` | Enter send mode |
+| `c` | Enter consumer mode |
 | `E` | Open in `$EDITOR` |
 | `y` | Copy schema to clipboard |
 | `q` | Quit |
+
+### Consumer Mode
+| Key | Action |
+|-----|--------|
+| `Ctrl+M` | Consume messages from topic |
+| `j/k` or `↑/↓` | Navigate through consumed messages |
+| `y` | Copy current message to clipboard |
+| `Esc` | Exit consumer mode |
 
 ### Send Mode
 | Key | Action |
@@ -144,12 +154,30 @@ export KAFKA_BOOTSTRAP_SERVERS=your-broker:9092
 | `Cmd+V` / `Ctrl+Shift+V` | Paste from clipboard |
 | `Esc` | Cancel |
 
+## Consumer Mode
+
+Browse and navigate Kafka messages from any topic:
+
+1. **Enter Consumer Mode**: Press `c` while viewing a schema to enter consumer mode
+2. **Consume Messages**: Press `Ctrl+M` to fetch up to 10 messages from the topic
+3. **Navigate**: Use `j/k` or arrow keys to browse through consumed messages
+4. **Message Counter**: Each message shows `Message N/M` indicating current position
+5. **View Details**: Each message displays:
+   - Message key (if present)
+   - Message value (payload)
+   - Offset in topic
+   - Timestamp
+6. **Copy**: Press `y` to copy the current message value to clipboard
+7. **Exit**: Press `Esc` to return to schema view
+
+Messages are fetched in batches (up to 10) and kept in memory for easy navigation without re-polling.
+
 ## Event Persistence
 
 Messages you send are automatically saved to `~/.config/avrocado/events/<topic>/`. You can:
 
 - **Save**: Press `Ctrl+N` in send mode to save the current message with an optional name (defaults to timestamp)
-- **Load**: Press `Ctrl+L` in send mode to browse and load previously sent messages
+- **Load**: Press `Ctrl+O` in send mode to browse and load previously sent messages
 - **Format**: Events are stored as JSON files for easy inspection and editing
 
 Events directory structure:
