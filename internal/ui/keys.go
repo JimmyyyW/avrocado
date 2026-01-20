@@ -16,6 +16,10 @@ type KeyMap struct {
 	Edit         key.Binding
 	EditExternal key.Binding
 	Send         key.Binding
+	Consumer     key.Binding
+	Fetch        key.Binding
+	SaveEvent    key.Binding
+	LoadEvent    key.Binding
 }
 
 var Keys = KeyMap{
@@ -45,7 +49,7 @@ var Keys = KeyMap{
 	),
 	Copy: key.NewBinding(
 		key.WithKeys("y"),
-		key.WithHelp("y", "copy schema"),
+		key.WithHelp("y", "copy"),
 	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
@@ -71,6 +75,22 @@ var Keys = KeyMap{
 		key.WithKeys("ctrl+s"),
 		key.WithHelp("ctrl+s", "send"),
 	),
+	Consumer: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "consumer mode"),
+	),
+	Fetch: key.NewBinding(
+		key.WithKeys("f"),
+		key.WithHelp("f", "fetch messages"),
+	),
+	SaveEvent: key.NewBinding(
+		key.WithKeys("ctrl+n"),
+		key.WithHelp("ctrl+n", "save message"),
+	),
+	LoadEvent: key.NewBinding(
+		key.WithKeys("ctrl+o"),
+		key.WithHelp("ctrl+o", "load message"),
+	),
 }
 
 func (k KeyMap) ShortHelp() []key.Binding {
@@ -82,6 +102,8 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.Enter},
 		{k.Search, k.Escape, k.Tab},
 		{k.Edit, k.EditExternal, k.Send},
-		{k.Copy, k.Quit},
+		{k.Consumer, k.Fetch, k.Copy},
+		{k.SaveEvent, k.LoadEvent, k.PageUp, k.PageDown},
+		{k.Quit},
 	}
 }

@@ -71,6 +71,7 @@ type Model struct {
 	err        error
 	statusMsg  string
 	copyNotify string
+	debugMsg   string // Persistent debug message for consumer mode
 
 	// Event persistence
 	lastPayload string
@@ -475,7 +476,8 @@ func (m *Model) enterConsumerMode() (tea.Model, tea.Cmd) {
 	// Create consumer
 	consumer, err := kafka.NewConsumer(m.cfg, topic)
 	if err != nil {
-		m.err = fmt.Errorf("[DEBUG] Failed to create consumer for topic %s: %w", topic, err)
+		m.debugMsg = fmt.Sprintf("[ERROR] Failed to create consumer for topic %s: %v", topic, err)
+		m.err = fmt.Errorf("failed to create consumer: %w", err)
 		return m, nil
 	}
 
@@ -483,8 +485,8 @@ func (m *Model) enterConsumerMode() (tea.Model, tea.Cmd) {
 	m.consumedMessages = []kafka.Message{}
 	m.currentMsgIdx = 0
 	m.state = stateConsumerMode
-	m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Topic: %s  |  Ctrl+M consume, Esc cancel, j/k navigate", topic)
-	m.err = fmt.Errorf("[DEBUG] Consumer created for topic: %s | Bootstrap: %s | Security: %s | Press Ctrl+M to fetch messages",
+	m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Topic: %s  |  f fetch, Esc cancel, j/k navigate", topic)
+	m.debugMsg = fmt.Sprintf("DEBUG: Consumer ready | Topic: %s | Bootstrap: %s | Protocol: %s",
 		topic, m.cfg.KafkaBootstrapServers, m.cfg.KafkaSecurityProtocol)
 	return m, nil
 }
@@ -501,12 +503,13 @@ func (m *Model) handleConsumerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.consumedMessages = []kafka.Message{}
 		m.currentMsgIdx = 0
+		m.debugMsg = "" // Clear debug message
 		m.state = stateViewing
 		m.statusMsg = fmt.Sprintf("[VIEW] %s", m.selectedSubject)
 		return m, nil
 
-	case "ctrl+m":
-		// Consume messages
+	case "f":
+		// Fetch messages
 		topic := config.SubjectToTopic(m.selectedSubject)
 		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetching from topic: %s (timeout: 5s)", topic)
 
@@ -516,23 +519,23 @@ func (m *Model) handleConsumerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		messages, err := m.consumer.FetchMessages(ctx, 10)
 		if err != nil {
 			// Surface detailed error information
-			m.err = fmt.Errorf("[DEBUG] Topic: %s | Consumer error: %w", topic, err)
-			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] ERROR - Check error area above. Topic: %s", topic)
+			m.debugMsg = fmt.Sprintf("ERROR fetching messages: Topic=%s, Error=%v", topic, err)
+			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] ERROR - Topic: %s", topic)
 			return m, nil
 		}
 
 		if len(messages) == 0 {
-			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] No messages available | Topic: %s | Bootstrap: %s | Protocol: %s",
+			m.debugMsg = fmt.Sprintf("DEBUG: Fetched 0 messages from topic=%s. Possible causes: (1) topic empty, (2) consumer starting from end, (3) connection issue. Bootstrap=%s Protocol=%s",
 				topic, m.cfg.KafkaBootstrapServers, m.cfg.KafkaSecurityProtocol)
-			m.err = fmt.Errorf("[DEBUG] Fetch returned 0 messages for topic %s. This means either: (1) topic has no messages, (2) consumer started reading from end instead of beginning, or (3) connection issue", topic)
+			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] No messages available | Topic: %s", topic)
 			return m, nil
 		}
 
 		// Success - show what we fetched
 		m.consumedMessages = messages
 		m.currentMsgIdx = 0
-		debugMsg := fmt.Sprintf("[DEBUG] Successfully fetched %d messages from topic: %s", len(messages), topic)
-		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetched %d messages. Showing 1/%d | %s", len(messages), len(messages), debugMsg)
+		m.debugMsg = fmt.Sprintf("SUCCESS: Fetched %d messages from topic=%s", len(messages), topic)
+		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetched %d messages. Showing 1/%d", len(messages), len(messages))
 		return m, nil
 
 	case "j", "down":
@@ -560,6 +563,18 @@ func (m *Model) handleConsumerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case "pgup", "ctrl+u":
+		// Scroll up within message
+		var cmd tea.Cmd
+		m.viewer, cmd = m.viewer.Update(msg)
+		return m, cmd
+
+	case "pgdn", "ctrl+d":
+		// Scroll down within message
+		var cmd tea.Cmd
+		m.viewer, cmd = m.viewer.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -656,15 +671,17 @@ func (m Model) View() string {
 	}
 
 	// Handle consumer mode
-	if m.state == stateConsumerMode {
-		return m.renderConsumerMode()
-	}
-
 	leftWidth := m.width / 3
 	rightWidth := m.width - leftWidth - 4
 
-	left := m.renderList(leftWidth, m.height-4)
-	right := m.renderViewer(rightWidth, m.height-4)
+	var left, right string
+	if m.state == stateConsumerMode {
+		left = m.renderConsumerList(leftWidth, m.height-4)
+		right = m.renderConsumerMessage(rightWidth, m.height-4)
+	} else {
+		left = m.renderList(leftWidth, m.height-4)
+		right = m.renderViewer(rightWidth, m.height-4)
+	}
 
 	var leftStyle, rightStyle lipgloss.Style
 	if m.focusedPane == listPane {
@@ -830,42 +847,93 @@ func (m Model) renderStatusBar() string {
 	return bar
 }
 
-func (m Model) renderConsumerMode() string {
+func (m Model) renderConsumerList(width, height int) string {
 	var b strings.Builder
 
-	title := lipgloss.NewStyle().Bold(true).Render("Consumer Mode")
+	title := ListTitleStyle.Render("Messages")
 	b.WriteString(title)
 	b.WriteString("\n\n")
 
 	if len(m.consumedMessages) == 0 {
-		b.WriteString("No messages. Press Ctrl+M to consume.\n")
-	} else {
-		currentMsg := m.consumedMessages[m.currentMsgIdx]
+		b.WriteString(HelpStyle.Render("Press 'f' to fetch messages"))
+		return b.String()
+	}
 
-		// Header with counter
-		header := fmt.Sprintf("Message %d/%d (Offset: %d)", m.currentMsgIdx+1, len(m.consumedMessages), currentMsg.Offset)
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(header))
-		b.WriteString("\n\n")
-
-		// Key
-		if currentMsg.Key != "" {
-			b.WriteString("Key:\n")
-			b.WriteString(currentMsg.Key)
-			b.WriteString("\n\n")
+	for i := 0; i < len(m.consumedMessages) && i < height-4; i++ {
+		prefix := "  "
+		offset := m.consumedMessages[i].Offset
+		key := m.consumedMessages[i].Key
+		if key == "" {
+			key = "-"
 		}
 
-		// Value (payload)
-		b.WriteString("Value:\n")
-		b.WriteString(currentMsg.Value)
-		b.WriteString("\n\n")
-
-		// Timestamp
-		b.WriteString(lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf("Timestamp: %s", currentMsg.Timestamp)))
+		if i == m.currentMsgIdx {
+			prefix = "> "
+			line := fmt.Sprintf("%s[%d] Key: %s", prefix, offset, key)
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true).Render(line))
+		} else {
+			line := fmt.Sprintf("%s[%d] Key: %s", prefix, offset, key)
+			b.WriteString(line)
+		}
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(lipgloss.NewStyle().Faint(true).Render("[Ctrl+M] Consume  [j/k] Navigate  [y] Copy  [Esc] Exit"))
+	if len(m.consumedMessages) > height-4 {
+		b.WriteString(HelpStyle.Render(fmt.Sprintf("... and %d more", len(m.consumedMessages)-(height-4))))
+	}
 
+	return b.String()
+}
+
+func (m Model) renderConsumerMessage(width, height int) string {
+	var b strings.Builder
+
+	// Title with debug info
+	title := EditTitleStyle.Render("Message Details")
+	b.WriteString(title)
+	b.WriteString("\n")
+
+	// Display debug message if present
+	if m.debugMsg != "" {
+		debugStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Italic(true)
+		b.WriteString(debugStyle.Render(m.debugMsg))
+		b.WriteString("\n\n")
+	}
+
+	if len(m.consumedMessages) == 0 {
+		b.WriteString(HelpStyle.Render("No messages fetched. Press 'f' to fetch."))
+		return b.String()
+	}
+
+	currentMsg := m.consumedMessages[m.currentMsgIdx]
+
+	// Build the message content
+	var content strings.Builder
+
+	// Header with counter
+	header := fmt.Sprintf("Message %d/%d (Offset: %d, Timestamp: %s)",
+		m.currentMsgIdx+1, len(m.consumedMessages), currentMsg.Offset, currentMsg.Timestamp)
+	content.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(header))
+	content.WriteString("\n\n")
+
+	// Key section
+	if currentMsg.Key != "" {
+		content.WriteString(lipgloss.NewStyle().Bold(true).Render("Key:"))
+		content.WriteString("\n")
+		content.WriteString(currentMsg.Key)
+		content.WriteString("\n\n")
+	}
+
+	// Value section
+	content.WriteString(lipgloss.NewStyle().Bold(true).Render("Value:"))
+	content.WriteString("\n")
+	content.WriteString(currentMsg.Value)
+
+	// Use viewport for scrolling
+	m.viewer.Width = width - 2
+	m.viewer.Height = height - 6
+	m.viewer.SetContent(content.String())
+
+	b.WriteString(m.viewer.View())
 	return b.String()
 }

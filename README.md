@@ -112,6 +112,7 @@ export KAFKA_BOOTSTRAP_SERVERS=your-broker:9092
 | Key | Action |
 |-----|--------|
 | `j/k` or `↑/↓` | Navigate subjects |
+| `Page Up/Down` or `Ctrl+U/D` | Page through subjects |
 | `/` | Search subjects |
 | `Enter` | View subject schema |
 | `Tab` | Switch pane focus |
@@ -122,6 +123,7 @@ export KAFKA_BOOTSTRAP_SERVERS=your-broker:9092
 | Key | Action |
 |-----|--------|
 | `j/k` or `↑/↓` | Scroll schema |
+| `Page Up/Down` or `Ctrl+U/D` | Page through schema |
 | `s` or `e` | Enter send mode |
 | `c` | Enter consumer mode |
 | `E` | Open in `$EDITOR` |
@@ -131,14 +133,16 @@ export KAFKA_BOOTSTRAP_SERVERS=your-broker:9092
 ### Consumer Mode
 | Key | Action |
 |-----|--------|
-| `Ctrl+M` | Consume messages from topic |
+| `f` | Fetch messages from topic |
 | `j/k` or `↑/↓` | Navigate through consumed messages |
+| `Page Up/Down` or `Ctrl+U/D` | Scroll within message content |
 | `y` | Copy current message to clipboard |
 | `Esc` | Exit consumer mode |
 
 ### Send Mode
 | Key | Action |
 |-----|--------|
+| `Tab` / `Shift+Tab` | Switch between message key and payload |
 | `Ctrl+S` | Send message to Kafka |
 | `Ctrl+N` | Save current message as event |
 | `Ctrl+O` | Load previously saved message |
