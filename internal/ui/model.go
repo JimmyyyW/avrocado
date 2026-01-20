@@ -56,12 +56,14 @@ type Model struct {
 	schemaID         int
 
 	searchInput textinput.Model
-	viewer      viewport.Model  // Read-only schema view
-	editor      textarea.Model  // Editable send mode
+	keyInput    textinput.Model  // Message key input
+	viewer      viewport.Model   // Read-only schema view
+	editor      textarea.Model   // Editable send mode
 	help        help.Model
 
 	focusedPane pane
 	state       state
+	sendKeyFocused bool // Track if key field has focus in send mode
 
 	width  int
 	height int
@@ -106,6 +108,10 @@ func NewModel(client *registry.Client, producer *kafka.Producer, cfg *config.Con
 	ti.Placeholder = "Search subjects..."
 	ti.CharLimit = 100
 
+	ki := textinput.New()
+	ki.Placeholder = "Message key (optional)"
+	ki.CharLimit = 256
+
 	vp := viewport.New(40, 20)
 
 	ta := textarea.New()
@@ -124,6 +130,7 @@ func NewModel(client *registry.Client, producer *kafka.Producer, cfg *config.Con
 		subjects:         []string{},
 		filteredSubjects: []string{},
 		searchInput:      ti,
+		keyInput:         ki,
 		viewer:           vp,
 		editor:           ta,
 		help:             h,
@@ -163,11 +170,11 @@ func (m Model) sendMessage() tea.Cmd {
 		// Determine topic from subject
 		topic := config.SubjectToTopic(m.selectedSubject)
 
-		// Produce message
+		// Produce message with optional key
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		err = m.producer.Produce(ctx, topic, m.schemaID, nil, binary)
+		err = m.producer.ProduceWithStringKey(ctx, topic, m.schemaID, m.keyInput.Value(), binary)
 		return messageSentMsg{topic: topic, err: err}
 	}
 }
@@ -336,8 +343,11 @@ func (m Model) enterSendMode() (tea.Model, tea.Cmd) {
 	topic := config.SubjectToTopic(m.selectedSubject)
 	m.editor.SetValue(template)
 	m.editor.Focus()
+	m.keyInput.SetValue("") // Clear key field
+	m.keyInput.Blur()
+	m.sendKeyFocused = false // Focus starts on message
 	m.state = stateSendMode
-	m.statusMsg = fmt.Sprintf("[SEND MODE] Target: %s  |  Ctrl+S send, Ctrl+N save, Ctrl+O load, Esc cancel", topic)
+	m.statusMsg = fmt.Sprintf("[SEND MODE] Target: %s  |  Ctrl+S send, Ctrl+N save, Ctrl+O load, Tab key, Esc cancel", topic)
 	return m, textarea.Blink
 }
 
@@ -385,11 +395,45 @@ func (m Model) handleSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.copyNotify = "Message copied to clipboard!"
 		}
 		return m, nil
+
+	case "tab":
+		// Toggle between key and message fields
+		if m.sendKeyFocused {
+			// Switch from key to message
+			m.keyInput.Blur()
+			m.editor.Focus()
+			m.sendKeyFocused = false
+		} else {
+			// Switch from message to key
+			m.editor.Blur()
+			m.keyInput.Focus()
+			m.sendKeyFocused = true
+		}
+		return m, nil
+
+	case "shift+tab":
+		// Toggle backwards between key and message fields
+		if m.sendKeyFocused {
+			// Switch from key to message
+			m.keyInput.Blur()
+			m.editor.Focus()
+			m.sendKeyFocused = false
+		} else {
+			// Switch from message to key
+			m.editor.Blur()
+			m.keyInput.Focus()
+			m.sendKeyFocused = true
+		}
+		return m, nil
 	}
 
-	// Pass other keys to textarea for editing
+	// Pass other keys to the focused field
 	var cmd tea.Cmd
-	m.editor, cmd = m.editor.Update(msg)
+	if m.sendKeyFocused {
+		m.keyInput, cmd = m.keyInput.Update(msg)
+	} else {
+		m.editor, cmd = m.editor.Update(msg)
+	}
 	return m, cmd
 }
 
@@ -726,7 +770,19 @@ func (m Model) renderViewer(width, height int) string {
 
 	contentHeight := height - 6
 	if m.state == stateSendMode || m.state == stateSending {
-		contentHeight = height - 8 // Account for topic line
+		contentHeight = height - 10 // Account for topic line + key field
+
+		// Render key input field
+		m.keyInput.Width = width - 2
+		keyStyle := lipgloss.NewStyle()
+		if m.sendKeyFocused && m.state == stateSendMode {
+			keyStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder(), true).
+				BorderForeground(lipgloss.Color("11"))
+		}
+		b.WriteString(keyStyle.Render(m.keyInput.View()))
+		b.WriteString("\n")
+
+		// Render message editor
 		m.editor.SetWidth(width - 2)
 		m.editor.SetHeight(contentHeight)
 		b.WriteString(m.editor.View())
