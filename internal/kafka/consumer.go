@@ -54,15 +54,14 @@ func NewConsumer(cfg *config.Config, topic string) (*Consumer, error) {
 	}
 
 	// Create reader with configured dialer
+	// Start from offset 0 (beginning of topic)
 	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:     []string{cfg.KafkaBootstrapServers},
-		Topic:       topic,
-		Dialer:      dialer,
-		StartOffset: kafka.LastOffset, // Start from the end, will seek to beginning
+		Brokers:        []string{cfg.KafkaBootstrapServers},
+		Topic:          topic,
+		Dialer:         dialer,
+		StartOffset:    0, // Read from the beginning
+		CommitInterval: time.Second,
 	})
-
-	// Seek to beginning
-	reader.SetOffset(0)
 
 	return &Consumer{reader: reader}, nil
 }
