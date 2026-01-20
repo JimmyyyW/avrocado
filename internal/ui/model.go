@@ -39,11 +39,13 @@ const (
 	stateSending
 	stateSavingEvent
 	stateLoadingEvent
+	stateConsumerMode
 )
 
 type Model struct {
 	client   *registry.Client
 	producer *kafka.Producer
+	cfg      *config.Config
 
 	subjects         []string
 	filteredSubjects []string
@@ -72,6 +74,11 @@ type Model struct {
 	lastPayload string
 	eventSaver  EventSaverModel
 	eventLoader EventLoaderModel
+
+	// Consumer mode
+	consumer         *kafka.Consumer
+	consumedMessages []kafka.Message
+	currentMsgIdx    int
 }
 
 type subjectsLoadedMsg struct {
@@ -94,7 +101,7 @@ type externalEditorMsg struct {
 	err     error
 }
 
-func NewModel(client *registry.Client, producer *kafka.Producer) Model {
+func NewModel(client *registry.Client, producer *kafka.Producer, cfg *config.Config) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Search subjects..."
 	ti.CharLimit = 100
@@ -113,6 +120,7 @@ func NewModel(client *registry.Client, producer *kafka.Producer) Model {
 	return Model{
 		client:           client,
 		producer:         producer,
+		cfg:              cfg,
 		subjects:         []string{},
 		filteredSubjects: []string{},
 		searchInput:      ti,
@@ -253,6 +261,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSavingEvent(msg)
 		case stateLoadingEvent:
 			return m.handleLoadingEvent(msg)
+		case stateConsumerMode:
+			return m.handleConsumerMode(msg)
 		}
 
 		// Global keybindings
@@ -295,6 +305,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateSendMode
 				m.statusMsg = "Opening external editor..."
 				return m, m.openExternalEditor()
+			}
+			return m, nil
+
+		case "c":
+			if m.state == stateViewing && m.currentSchema != "" {
+				return m.enterConsumerMode()
 			}
 			return m, nil
 		}
@@ -409,6 +425,91 @@ func (m *Model) handleLoadingEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) enterConsumerMode() (tea.Model, tea.Cmd) {
+	topic := config.SubjectToTopic(m.selectedSubject)
+
+	// Create consumer
+	consumer, err := kafka.NewConsumer(m.cfg, topic)
+	if err != nil {
+		m.err = fmt.Errorf("creating consumer: %w", err)
+		return m, nil
+	}
+
+	m.consumer = consumer
+	m.consumedMessages = []kafka.Message{}
+	m.currentMsgIdx = 0
+	m.state = stateConsumerMode
+	m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Topic: %s  |  Ctrl+M consume, Esc cancel, j/k navigate", topic)
+	return m, nil
+}
+
+func (m *Model) handleConsumerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "esc":
+		// Exit consumer mode
+		if m.consumer != nil {
+			m.consumer.Close()
+			m.consumer = nil
+		}
+		m.consumedMessages = []kafka.Message{}
+		m.currentMsgIdx = 0
+		m.state = stateViewing
+		m.statusMsg = fmt.Sprintf("[VIEW] %s", m.selectedSubject)
+		return m, nil
+
+	case "ctrl+m":
+		// Consume messages
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		messages, err := m.consumer.FetchMessages(ctx, 10)
+		if err != nil {
+			m.err = fmt.Errorf("consuming messages: %w", err)
+			return m, nil
+		}
+
+		if len(messages) == 0 {
+			m.statusMsg = "[CONSUMER MODE] No messages available"
+			return m, nil
+		}
+
+		m.consumedMessages = messages
+		m.currentMsgIdx = 0
+		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetched %d messages. Showing 1/%d", len(messages), len(messages))
+		return m, nil
+
+	case "j", "down":
+		if m.currentMsgIdx < len(m.consumedMessages)-1 {
+			m.currentMsgIdx++
+			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Message %d/%d", m.currentMsgIdx+1, len(m.consumedMessages))
+		}
+		return m, nil
+
+	case "k", "up":
+		if m.currentMsgIdx > 0 {
+			m.currentMsgIdx--
+			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Message %d/%d", m.currentMsgIdx+1, len(m.consumedMessages))
+		}
+		return m, nil
+
+	case "y":
+		// Copy current message
+		if len(m.consumedMessages) > 0 {
+			msg := m.consumedMessages[m.currentMsgIdx]
+			if err := clipboard.WriteAll(msg.Value); err != nil {
+				m.err = fmt.Errorf("failed to copy: %w", err)
+			} else {
+				m.copyNotify = "Message copied to clipboard!"
+			}
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
 func (m Model) handleSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -497,6 +598,11 @@ func (m Model) View() string {
 	}
 	if m.state == stateLoadingEvent {
 		return m.eventLoader.View()
+	}
+
+	// Handle consumer mode
+	if m.state == stateConsumerMode {
+		return m.renderConsumerMode()
 	}
 
 	leftWidth := m.width / 3
@@ -655,4 +761,44 @@ func (m Model) renderStatusBar() string {
 
 	bar := StatusBarStyle.Width(m.width).Render(status)
 	return bar
+}
+
+func (m Model) renderConsumerMode() string {
+	var b strings.Builder
+
+	title := lipgloss.NewStyle().Bold(true).Render("Consumer Mode")
+	b.WriteString(title)
+	b.WriteString("\n\n")
+
+	if len(m.consumedMessages) == 0 {
+		b.WriteString("No messages. Press Ctrl+M to consume.\n")
+	} else {
+		currentMsg := m.consumedMessages[m.currentMsgIdx]
+
+		// Header with counter
+		header := fmt.Sprintf("Message %d/%d (Offset: %d)", m.currentMsgIdx+1, len(m.consumedMessages), currentMsg.Offset)
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(header))
+		b.WriteString("\n\n")
+
+		// Key
+		if currentMsg.Key != "" {
+			b.WriteString("Key:\n")
+			b.WriteString(currentMsg.Key)
+			b.WriteString("\n\n")
+		}
+
+		// Value (payload)
+		b.WriteString("Value:\n")
+		b.WriteString(currentMsg.Value)
+		b.WriteString("\n\n")
+
+		// Timestamp
+		b.WriteString(lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf("Timestamp: %s", currentMsg.Timestamp)))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(lipgloss.NewStyle().Faint(true).Render("[Ctrl+M] Consume  [j/k] Navigate  [y] Copy  [Esc] Exit"))
+
+	return b.String()
 }

@@ -40,7 +40,7 @@ func main() {
 		}
 	}
 
-	model := ui.NewModel(client, producer)
+	model := ui.NewModel(client, producer, cfg)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
