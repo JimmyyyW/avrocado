@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -86,8 +87,8 @@ func (c *Consumer) FetchMessages(ctx context.Context, maxMessages int) ([]Messag
 		}
 
 		messages = append(messages, Message{
-			Key:       string(msg.Key),
-			Value:     string(msg.Value),
+			Key:       base64.StdEncoding.EncodeToString(msg.Key),
+			Value:     base64.StdEncoding.EncodeToString(msg.Value),
 			Offset:    msg.Offset,
 			Timestamp: msg.Time,
 		})

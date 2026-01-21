@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -887,11 +888,19 @@ func (m Model) renderConsumerList(width, height int) string {
 }
 
 // decodeAvroMessage decodes a Kafka message that contains Avro data
+// Expects base64-encoded binary data as input
 // Returns formatted JSON or original string if decoding fails
 func (m Model) decodeAvroMessage(payload string) string {
-	// Try to parse as JSON first (in case it's already JSON)
+	// First, decode from base64 to get the binary data
+	binaryData, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		// Not base64 encoded, try as-is
+		binaryData = []byte(payload)
+	}
+
+	// Try to parse binary as JSON first (in case it's already JSON)
 	var obj interface{}
-	if json.Unmarshal([]byte(payload), &obj) == nil {
+	if json.Unmarshal(binaryData, &obj) == nil {
 		// It's already valid JSON, pretty-print it
 		pretty, err := json.MarshalIndent(obj, "", "  ")
 		if err == nil {
@@ -906,9 +915,9 @@ func (m Model) decodeAvroMessage(payload string) string {
 			return payload // Fall back to original
 		}
 
-		// The payload might include the Schema Registry wire format (magic byte + schema ID + data)
+		// The binary data might include the Schema Registry wire format (magic byte + schema ID + data)
 		// Try to decode with the current schema first
-		jsonData, err := validator.Decode([]byte(payload))
+		jsonData, err := validator.Decode(binaryData)
 		if err == nil {
 			// Successfully decoded, format it nicely
 			var obj interface{}
@@ -922,10 +931,10 @@ func (m Model) decodeAvroMessage(payload string) string {
 		}
 
 		// If that failed and we have wire format (first byte is 0x00), try stripping schema header
-		if len(payload) > 5 && payload[0] == 0 {
+		if len(binaryData) > 5 && binaryData[0] == 0 {
 			// Skip the magic byte and schema ID (5 bytes total)
-			avroPayload := payload[5:]
-			jsonData, err := validator.Decode([]byte(avroPayload))
+			avroPayload := binaryData[5:]
+			jsonData, err := validator.Decode(avroPayload)
 			if err == nil {
 				// Successfully decoded
 				var obj interface{}
@@ -940,7 +949,7 @@ func (m Model) decodeAvroMessage(payload string) string {
 		}
 	}
 
-	// Fall back to original payload
+	// Fall back to original payload as-is
 	return payload
 }
 
