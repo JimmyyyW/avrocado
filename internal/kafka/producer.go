@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -25,43 +26,47 @@ func NewProducer(cfg *config.Config) (*Producer, error) {
 	}
 
 	// Create dialer with optional SASL/TLS support
-	dialer := &kafka.Dialer{
-		Timeout:   10 * time.Second,
-		DualStack: true,
-	}
-
-	// Configure SASL_SSL if needed
-	if cfg.KafkaSecurityProtocol == "SASL_SSL" {
-		// Configure TLS with system CA certificates
-		dialer.TLS = &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		}
-
-		// Configure SASL PLAIN mechanism (for Confluent Cloud)
-		if cfg.KafkaSASLUsername != "" && cfg.KafkaSASLPassword != "" {
-			dialer.SASLMechanism = plain.Mechanism{
-				Username: cfg.KafkaSASLUsername,
-				Password: cfg.KafkaSASLPassword,
-			}
-		}
+	dialer, err := newDialer(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("dialer error: %w", err)
 	}
 
 	// Create writer with configured dialer
-	writer := &kafka.Writer{
-		Addr:         kafka.TCP(cfg.KafkaBootstrapServers),
-		Balancer:     &kafka.LeastBytes{},
-		WriteTimeout: 10 * time.Second,
-		RequiredAcks: kafka.RequireOne,
-	}
-
-	// If we have a dialer with special config, use transport
-	if dialer.TLS != nil || dialer.SASLMechanism != nil {
-		writer.Transport = &kafka.Transport{
-			Dial: dialer.DialFunc,
-		}
-	}
+	writer := kafka.NewWriter(kafka.WriterConfig{
+		Brokers: []string{cfg.KafkaBootstrapServers},
+		Dialer: dialer,
+		Balancer: &kafka.LeastBytes{},
+		RequiredAcks: int(kafka.RequireAll),
+	})
 
 	return &Producer{writer: writer}, nil
+}
+
+func newDialer(cfg *config.Config) (*kafka.Dialer, error) {
+	dialer := &kafka.Dialer{
+		Timeout: 10 * time.Second,
+		DualStack: true,
+	}
+
+	switch strings.ToUpper(cfg.KafkaSecurityProtocol) {
+	case "PLAINTEXT":
+		return dialer, nil
+	case "SASL_SSL":
+		if cfg.KafkaSASLUsername == "" || cfg.KafkaSASLPassword == "" {
+			return nil, fmt.Errorf("SASL creds missing")
+		}
+
+		dialer.SASLMechanism = plain.Mechanism{
+			Username: cfg.KafkaSASLUsername,
+			Password: cfg.KafkaSASLPassword,
+		}
+
+		dialer.TLS = &tls.Config{}
+		return dialer, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported kafka security protocol")
+	}
 }
 
 // Produce sends a message to the specified topic.
