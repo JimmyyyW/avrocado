@@ -56,6 +56,23 @@ func (v *Validator) Encode(jsonData string) ([]byte, error) {
 	return binary, nil
 }
 
+// Decode converts Avro binary data to JSON.
+// Returns the JSON string or an error if decoding fails.
+func (v *Validator) Decode(binary []byte) (string, error) {
+	native, _, err := v.codec.NativeFromBinary(binary)
+	if err != nil {
+		return "", fmt.Errorf("decoding failed: %w", err)
+	}
+
+	// Convert native Go types back to JSON
+	jsonBytes, err := json.Marshal(native)
+	if err != nil {
+		return "", fmt.Errorf("converting to JSON: %w", err)
+	}
+
+	return string(jsonBytes), nil
+}
+
 // ValidateAndEncode validates JSON data and returns Avro binary if valid.
 func ValidateAndEncode(schemaJSON, jsonData string) ([]byte, error) {
 	v, err := NewValidator(schemaJSON)

@@ -886,23 +886,62 @@ func (m Model) renderConsumerList(width, height int) string {
 	return b.String()
 }
 
-// formatJSON attempts to parse and pretty-print JSON, otherwise returns the original string
-func formatJSON(payload string) string {
+// decodeAvroMessage decodes a Kafka message that contains Avro data
+// Returns formatted JSON or original string if decoding fails
+func (m Model) decodeAvroMessage(payload string) string {
+	// Try to parse as JSON first (in case it's already JSON)
 	var obj interface{}
-	err := json.Unmarshal([]byte(payload), &obj)
-	if err != nil {
-		// Not valid JSON, return as-is
-		return payload
+	if json.Unmarshal([]byte(payload), &obj) == nil {
+		// It's already valid JSON, pretty-print it
+		pretty, err := json.MarshalIndent(obj, "", "  ")
+		if err == nil {
+			return string(pretty)
+		}
 	}
 
-	// Pretty-print the JSON with 2-space indentation
-	pretty, err := json.MarshalIndent(obj, "", "  ")
-	if err != nil {
-		// Failed to marshal, return original
-		return payload
+	// If we have a selected subject, try to decode as Avro using that schema
+	if m.selectedSubject != "" && m.rawSchema != "" {
+		validator, err := avro.NewValidator(m.rawSchema)
+		if err != nil {
+			return payload // Fall back to original
+		}
+
+		// The payload might include the Schema Registry wire format (magic byte + schema ID + data)
+		// Try to decode with the current schema first
+		jsonData, err := validator.Decode([]byte(payload))
+		if err == nil {
+			// Successfully decoded, format it nicely
+			var obj interface{}
+			if err := json.Unmarshal([]byte(jsonData), &obj); err == nil {
+				pretty, err := json.MarshalIndent(obj, "", "  ")
+				if err == nil {
+					return string(pretty)
+				}
+			}
+			return jsonData
+		}
+
+		// If that failed and we have wire format (first byte is 0x00), try stripping schema header
+		if len(payload) > 5 && payload[0] == 0 {
+			// Skip the magic byte and schema ID (5 bytes total)
+			avroPayload := payload[5:]
+			jsonData, err := validator.Decode([]byte(avroPayload))
+			if err == nil {
+				// Successfully decoded
+				var obj interface{}
+				if err := json.Unmarshal([]byte(jsonData), &obj); err == nil {
+					pretty, err := json.MarshalIndent(obj, "", "  ")
+					if err == nil {
+						return string(pretty)
+					}
+				}
+				return jsonData
+			}
+		}
 	}
 
-	return string(pretty)
+	// Fall back to original payload
+	return payload
 }
 
 func (m Model) renderConsumerMessage(width, height int) string {
@@ -936,18 +975,18 @@ func (m Model) renderConsumerMessage(width, height int) string {
 	content.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(header))
 	content.WriteString("\n\n")
 
-	// Key section - format as JSON if possible
+	// Key section - decode Avro if possible
 	if currentMsg.Key != "" {
 		content.WriteString(lipgloss.NewStyle().Bold(true).Render("Key:"))
 		content.WriteString("\n")
-		content.WriteString(formatJSON(currentMsg.Key))
+		content.WriteString(m.decodeAvroMessage(currentMsg.Key))
 		content.WriteString("\n\n")
 	}
 
-	// Value section - format as JSON if possible
+	// Value section - decode Avro if possible
 	content.WriteString(lipgloss.NewStyle().Bold(true).Render("Value:"))
 	content.WriteString("\n")
-	content.WriteString(formatJSON(currentMsg.Value))
+	content.WriteString(m.decodeAvroMessage(currentMsg.Value))
 
 	// Use viewport for scrolling
 	m.viewer.Width = width - 2
