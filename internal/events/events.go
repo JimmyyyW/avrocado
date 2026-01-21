@@ -13,13 +13,14 @@ import (
 type Event struct {
 	Topic     string    `json:"topic"`
 	SchemaID  int       `json:"schema_id"`
+	Key       string    `json:"key,omitempty"`
 	Payload   string    `json:"payload"`
 	Timestamp time.Time `json:"timestamp"`
 	Name      string    `json:"name"`
 }
 
 // SaveEvent saves an event to disk
-func SaveEvent(baseDir, topic, payload string, schemaID int, name string) (string, error) {
+func SaveEvent(baseDir, topic, key, payload string, schemaID int, name string) (string, error) {
 	// Create events directory structure
 	eventDir := filepath.Join(baseDir, "events", topic)
 	if err := os.MkdirAll(eventDir, 0700); err != nil {
@@ -61,6 +62,7 @@ func SaveEvent(baseDir, topic, payload string, schemaID int, name string) (strin
 	event := Event{
 		Topic:     topic,
 		SchemaID:  schemaID,
+		Key:       key,
 		Payload:   payload,
 		Timestamp: time.Now(),
 		Name:      filepath.Base(filePath),

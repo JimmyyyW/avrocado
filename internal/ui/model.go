@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/help"
@@ -411,7 +412,7 @@ func (m Model) handleSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+n":
 		// Save current message
 		topic := config.SubjectToTopic(m.selectedSubject)
-		m.eventSaver = NewEventSaver(topic, m.schemaID, m.editor.Value())
+		m.eventSaver = NewEventSaver(topic, m.keyInput.Value(), m.schemaID, m.editor.Value())
 		m.state = stateSavingEvent
 		m.statusMsg = "[SAVE EVENT]"
 		return m, nil
@@ -478,6 +479,7 @@ func (m *Model) handleLoadingEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.eventLoader.Quit() {
 		event := m.eventLoader.LoadedEvent()
 		if event != nil {
+			m.keyInput.SetValue(event.Key)
 			m.editor.SetValue(event.Payload)
 			m.statusMsg = fmt.Sprintf("[SEND MODE] Loaded: %s", event.Name)
 		}
@@ -914,6 +916,27 @@ func (m Model) renderConsumerList(width, height int) string {
 	return b.String()
 }
 
+// decodeKey decodes a Kafka message key from base64
+// Keys are NOT Avro-encoded, just raw bytes
+// Returns UTF-8 string if valid, otherwise returns the base64-encoded value for display
+func (m Model) decodeKey(keyBase64 string) string {
+	// Base64 decode the key
+	binaryData, err := base64.StdEncoding.DecodeString(keyBase64)
+	if err != nil {
+		// If base64 decoding fails, return as-is
+		return keyBase64
+	}
+
+	// Try to interpret as UTF-8 string
+	keyStr := string(binaryData)
+	if utf8.ValidString(keyStr) {
+		return keyStr
+	}
+
+	// If not valid UTF-8, return as base64 with a note
+	return fmt.Sprintf("[binary data] %s", keyBase64)
+}
+
 // decodeAvroMessage decodes a Kafka message that contains Avro data
 // Expects base64-encoded binary data as input
 // Returns formatted JSON or original string if decoding fails
@@ -1014,19 +1037,12 @@ func (m Model) renderConsumerMessage(width, height int) string {
 	content.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(header))
 	content.WriteString("\n\n")
 
-	// Key section - decode Avro if possible
+	// Key section - decode from base64 (keys are not Avro-encoded)
 	if currentMsg.Key != "" {
 		content.WriteString(lipgloss.NewStyle().Bold(true).Render("Key:"))
 		content.WriteString("\n")
-		keyStr := m.decodeAvroMessage(currentMsg.Key)
-		if strings.Contains(keyStr, "ERROR") {
-			// Error message - wrap and color red
-			errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-			wrappedKey := lipgloss.NewStyle().Width(width - 4).Render(errorStyle.Render(keyStr))
-			content.WriteString(wrappedKey)
-		} else {
-			content.WriteString(keyStr)
-		}
+		keyStr := m.decodeKey(currentMsg.Key)
+		content.WriteString(keyStr)
 		content.WriteString("\n\n")
 	}
 

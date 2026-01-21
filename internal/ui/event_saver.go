@@ -11,6 +11,7 @@ import (
 
 type EventSaverModel struct {
 	topic       string
+	key         string
 	payload     string
 	schemaID    int
 	eventName   string
@@ -22,9 +23,10 @@ type EventSaverModel struct {
 }
 
 // NewEventSaver creates a new event saver model
-func NewEventSaver(topic string, schemaID int, payload string) EventSaverModel {
+func NewEventSaver(topic, key string, schemaID int, payload string) EventSaverModel {
 	return EventSaverModel{
 		topic:       topic,
+		key:         key,
 		payload:     payload,
 		schemaID:    schemaID,
 		eventName:   "",
@@ -46,7 +48,7 @@ func (m EventSaverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// Save event
 			basePath := events.GetEventsDir()
-			path, err := events.SaveEvent(basePath, m.topic, m.payload, m.schemaID, m.eventName)
+			path, err := events.SaveEvent(basePath, m.topic, m.key, m.payload, m.schemaID, m.eventName)
 			if err != nil {
 				m.err = err.Error()
 			} else {
