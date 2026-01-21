@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -885,6 +886,25 @@ func (m Model) renderConsumerList(width, height int) string {
 	return b.String()
 }
 
+// formatJSON attempts to parse and pretty-print JSON, otherwise returns the original string
+func formatJSON(payload string) string {
+	var obj interface{}
+	err := json.Unmarshal([]byte(payload), &obj)
+	if err != nil {
+		// Not valid JSON, return as-is
+		return payload
+	}
+
+	// Pretty-print the JSON with 2-space indentation
+	pretty, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		// Failed to marshal, return original
+		return payload
+	}
+
+	return string(pretty)
+}
+
 func (m Model) renderConsumerMessage(width, height int) string {
 	var b strings.Builder
 
@@ -916,18 +936,18 @@ func (m Model) renderConsumerMessage(width, height int) string {
 	content.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(header))
 	content.WriteString("\n\n")
 
-	// Key section
+	// Key section - format as JSON if possible
 	if currentMsg.Key != "" {
 		content.WriteString(lipgloss.NewStyle().Bold(true).Render("Key:"))
 		content.WriteString("\n")
-		content.WriteString(currentMsg.Key)
+		content.WriteString(formatJSON(currentMsg.Key))
 		content.WriteString("\n\n")
 	}
 
-	// Value section
+	// Value section - format as JSON if possible
 	content.WriteString(lipgloss.NewStyle().Bold(true).Render("Value:"))
 	content.WriteString("\n")
-	content.WriteString(currentMsg.Value)
+	content.WriteString(formatJSON(currentMsg.Value))
 
 	// Use viewport for scrolling
 	m.viewer.Width = width - 2
