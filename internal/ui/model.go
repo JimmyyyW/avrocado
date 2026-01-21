@@ -85,6 +85,8 @@ type Model struct {
 	consumer         *kafka.Consumer
 	consumedMessages []kafka.Message
 	currentMsgIdx    int
+	isLoadingMessages bool // Track if we're fetching messages
+	spinnerFrame     int   // Spinner animation frame
 }
 
 type subjectsLoadedMsg struct {
@@ -106,6 +108,13 @@ type externalEditorMsg struct {
 	content string
 	err     error
 }
+
+type messagesLoadedMsg struct {
+	messages []kafka.Message
+	err      error
+}
+
+type tickMsg struct{}
 
 func NewModel(client *registry.Client, producer *kafka.Producer, cfg *config.Config) Model {
 	ti := textinput.New()
@@ -252,6 +261,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			topic := config.SubjectToTopic(m.selectedSubject)
 			m.state = stateSendMode
 			m.statusMsg = fmt.Sprintf("[SEND MODE] Target: %s  |  Ctrl+S to send, Esc to cancel", topic)
+		}
+		return m, nil
+
+	case messagesLoadedMsg:
+		m.isLoadingMessages = false
+		if msg.err != nil {
+			m.debugMsg = fmt.Sprintf("ERROR fetching messages: %v", msg.err)
+			m.statusMsg = "[CONSUMER MODE] ERROR fetching messages"
+			return m, nil
+		}
+
+		if len(msg.messages) == 0 {
+			m.debugMsg = "No messages found. Topic may be empty or consumer at end of partition."
+			m.statusMsg = "[CONSUMER MODE] No messages available"
+			return m, nil
+		}
+
+		// Success - show what we fetched
+		m.consumedMessages = msg.messages
+		m.currentMsgIdx = 0
+		m.debugMsg = fmt.Sprintf("Fetched %d messages", len(msg.messages))
+		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Showing 1/%d", len(msg.messages))
+		return m, nil
+
+	case tickMsg:
+		// Increment spinner frame and continue animating if still loading
+		if m.isLoadingMessages {
+			m.spinnerFrame++
+			return m, (&m).tickCmd()
 		}
 		return m, nil
 
@@ -523,51 +561,41 @@ func (m *Model) handleConsumerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "esc":
-		// Exit consumer mode
-		if m.consumer != nil {
-			m.consumer.Close()
-			m.consumer = nil
-		}
-		m.consumedMessages = []kafka.Message{}
-		m.currentMsgIdx = 0
-		m.debugMsg = "" // Clear debug message
+		// Exit consumer mode and close in background
+		// Immediately transition back to viewing mode, consumer closes asynchronously
 		m.state = stateViewing
 		m.statusMsg = fmt.Sprintf("[VIEW] %s", m.selectedSubject)
+		m.consumedMessages = []kafka.Message{}
+		m.currentMsgIdx = 0
+		m.debugMsg = ""
+
+		// Close consumer in background (safe because reference is captured in goroutine)
+		if m.consumer != nil {
+			go m.consumer.Close()
+			m.consumer = nil
+		}
+
 		return m, nil
 
 	case "f":
-		// Fetch messages
+		// Fetch messages asynchronously
 		if m.consumer == nil {
 			m.debugMsg = "ERROR: Consumer not initialized. Re-enter consumer mode."
 			return m, nil
 		}
 
+		if m.isLoadingMessages {
+			// Already fetching, ignore
+			return m, nil
+		}
+
 		topic := config.SubjectToTopic(m.selectedSubject)
-		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetching from topic: %s (timeout: 5s)...", topic)
+		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetching from topic: %s...", topic)
+		m.isLoadingMessages = true
+		m.debugMsg = "Fetching messages..."
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		messages, err := m.consumer.FetchMessages(ctx, 10)
-		if err != nil {
-			// Surface detailed error information
-			m.debugMsg = fmt.Sprintf("ERROR fetching messages: %v", err)
-			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] ERROR fetching messages")
-			return m, nil
-		}
-
-		if len(messages) == 0 {
-			m.debugMsg = "No messages found. Topic may be empty or consumer at end of partition."
-			m.statusMsg = "[CONSUMER MODE] No messages available"
-			return m, nil
-		}
-
-		// Success - show what we fetched
-		m.consumedMessages = messages
-		m.currentMsgIdx = 0
-		m.debugMsg = fmt.Sprintf("Fetched %d messages", len(messages))
-		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Showing 1/%d", len(messages))
-		return m, nil
+		// Fetch messages asynchronously with spinner animation
+		return m, tea.Batch(m.fetchMessagesCmd(), m.tickCmd())
 
 	case "j", "down":
 		if m.currentMsgIdx < len(m.consumedMessages)-1 {
@@ -1004,6 +1032,16 @@ func (m Model) renderConsumerMessage(width, height int) string {
 	b.WriteString(title)
 	b.WriteString("\n")
 
+	// Display loading spinner if fetching
+	if m.isLoadingMessages {
+		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		frame := m.spinnerFrame % len(spinner)
+		loadingMsg := fmt.Sprintf("%s Fetching messages...", spinner[frame])
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Italic(true).Render(loadingMsg))
+		b.WriteString("\n\n")
+		return b.String()
+	}
+
 	// Display error or debug message if present
 	if m.debugMsg != "" {
 		var msgStyle lipgloss.Style
@@ -1069,3 +1107,35 @@ func (m Model) renderConsumerMessage(width, height int) string {
 	b.WriteString(m.viewer.View())
 	return b.String()
 }
+
+// fetchMessagesCmd returns a command that fetches messages asynchronously
+func (m *Model) fetchMessagesCmd() tea.Cmd {
+	consumer := m.consumer // Capture consumer reference
+
+	return func() tea.Msg {
+		if consumer == nil {
+			return messagesLoadedMsg{
+				messages: nil,
+				err:      fmt.Errorf("consumer is nil"),
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		messages, err := consumer.FetchMessages(ctx, 10)
+		return messagesLoadedMsg{
+			messages: messages,
+			err:      err,
+		}
+	}
+}
+
+// tickCmd returns a command that sends a tick message after 100ms
+// Used to animate the loading spinner
+func (m *Model) tickCmd() tea.Cmd {
+	return tea.Tick(time.Millisecond*100, func(time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
+
