@@ -357,7 +357,41 @@ func (m Model) enterSendMode() (tea.Model, tea.Cmd) {
 func (m Model) handleSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Check send keys first (before passing to textarea)
+	// If key field is focused, only allow Tab/Shift+Tab/Esc for navigation
+	// All other keys go to the textinput
+	if m.sendKeyFocused {
+		switch key {
+		case "tab":
+			// Switch from key to message
+			m.keyInput.Blur()
+			m.editor.Focus()
+			m.sendKeyFocused = false
+			return m, nil
+
+		case "shift+tab":
+			// Switch from key to message (shift+tab goes backwards)
+			m.keyInput.Blur()
+			m.editor.Focus()
+			m.sendKeyFocused = false
+			return m, nil
+
+		case "esc":
+			// Cancel, return to view mode
+			m.keyInput.Blur()
+			m.editor.Blur()
+			m.state = stateViewing
+			m.statusMsg = fmt.Sprintf("[VIEW] %s", m.selectedSubject)
+			return m, nil
+
+		default:
+			// All other keys go to the key input field
+			var cmd tea.Cmd
+			m.keyInput, cmd = m.keyInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	// Key field is not focused - handle global keybindings and editor input
 	switch key {
 	case "esc":
 		// Cancel, return to view mode
@@ -383,7 +417,7 @@ func (m Model) handleSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "ctrl+o":
-		// Load saved message (Ctrl+L was intercepted by terminal)
+		// Load saved message
 		topic := config.SubjectToTopic(m.selectedSubject)
 		m.eventLoader = NewEventLoader(topic)
 		m.state = stateLoadingEvent
@@ -400,44 +434,25 @@ func (m Model) handleSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "tab":
-		// Toggle between key and message fields
-		if m.sendKeyFocused {
-			// Switch from key to message
-			m.keyInput.Blur()
-			m.editor.Focus()
-			m.sendKeyFocused = false
-		} else {
-			// Switch from message to key
-			m.editor.Blur()
-			m.keyInput.Focus()
-			m.sendKeyFocused = true
-		}
+		// Switch from message to key
+		m.editor.Blur()
+		m.keyInput.Focus()
+		m.sendKeyFocused = true
 		return m, nil
 
 	case "shift+tab":
-		// Toggle backwards between key and message fields
-		if m.sendKeyFocused {
-			// Switch from key to message
-			m.keyInput.Blur()
-			m.editor.Focus()
-			m.sendKeyFocused = false
-		} else {
-			// Switch from message to key
-			m.editor.Blur()
-			m.keyInput.Focus()
-			m.sendKeyFocused = true
-		}
+		// Shift+tab when in message field - go to key field
+		m.editor.Blur()
+		m.keyInput.Focus()
+		m.sendKeyFocused = true
 		return m, nil
-	}
 
-	// Pass other keys to the focused field
-	var cmd tea.Cmd
-	if m.sendKeyFocused {
-		m.keyInput, cmd = m.keyInput.Update(msg)
-	} else {
+	default:
+		// Pass other keys to the message editor
+		var cmd tea.Cmd
 		m.editor, cmd = m.editor.Update(msg)
+		return m, cmd
 	}
-	return m, cmd
 }
 
 func (m *Model) handleSavingEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -475,21 +490,29 @@ func (m *Model) handleLoadingEvent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) enterConsumerMode() (tea.Model, tea.Cmd) {
 	topic := config.SubjectToTopic(m.selectedSubject)
 
-	// Create consumer
+	// Close any existing consumer first
+	if m.consumer != nil {
+		m.consumer.Close()
+		m.consumer = nil
+	}
+
+	// Clear old messages
+	m.consumedMessages = []kafka.Message{}
+	m.currentMsgIdx = 0
+	m.debugMsg = ""
+
+	// Create new consumer
 	consumer, err := kafka.NewConsumer(m.cfg, topic)
 	if err != nil {
-		m.debugMsg = fmt.Sprintf("[ERROR] Failed to create consumer for topic %s: %v", topic, err)
+		m.debugMsg = fmt.Sprintf("ERROR: Failed to create consumer for topic %s: %v", topic, err)
 		m.err = fmt.Errorf("failed to create consumer: %w", err)
 		return m, nil
 	}
 
 	m.consumer = consumer
-	m.consumedMessages = []kafka.Message{}
-	m.currentMsgIdx = 0
 	m.state = stateConsumerMode
 	m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Topic: %s  |  f fetch, Esc cancel, j/k navigate", topic)
-	m.debugMsg = fmt.Sprintf("DEBUG: Consumer ready | Topic: %s | Bootstrap: %s | Protocol: %s",
-		topic, m.cfg.KafkaBootstrapServers, m.cfg.KafkaSecurityProtocol)
+	m.debugMsg = fmt.Sprintf("Consumer ready | Topic: %s | Press 'f' to fetch messages", topic)
 	return m, nil
 }
 
@@ -512,8 +535,13 @@ func (m *Model) handleConsumerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "f":
 		// Fetch messages
+		if m.consumer == nil {
+			m.debugMsg = "ERROR: Consumer not initialized. Re-enter consumer mode."
+			return m, nil
+		}
+
 		topic := config.SubjectToTopic(m.selectedSubject)
-		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetching from topic: %s (timeout: 5s)", topic)
+		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetching from topic: %s (timeout: 5s)...", topic)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -521,23 +549,22 @@ func (m *Model) handleConsumerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		messages, err := m.consumer.FetchMessages(ctx, 10)
 		if err != nil {
 			// Surface detailed error information
-			m.debugMsg = fmt.Sprintf("ERROR fetching messages: Topic=%s, Error=%v", topic, err)
-			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] ERROR - Topic: %s", topic)
+			m.debugMsg = fmt.Sprintf("ERROR fetching messages: %v", err)
+			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] ERROR fetching messages")
 			return m, nil
 		}
 
 		if len(messages) == 0 {
-			m.debugMsg = fmt.Sprintf("DEBUG: Fetched 0 messages from topic=%s. Possible causes: (1) topic empty, (2) consumer starting from end, (3) connection issue. Bootstrap=%s Protocol=%s",
-				topic, m.cfg.KafkaBootstrapServers, m.cfg.KafkaSecurityProtocol)
-			m.statusMsg = fmt.Sprintf("[CONSUMER MODE] No messages available | Topic: %s", topic)
+			m.debugMsg = "No messages found. Topic may be empty or consumer at end of partition."
+			m.statusMsg = "[CONSUMER MODE] No messages available"
 			return m, nil
 		}
 
 		// Success - show what we fetched
 		m.consumedMessages = messages
 		m.currentMsgIdx = 0
-		m.debugMsg = fmt.Sprintf("SUCCESS: Fetched %d messages from topic=%s", len(messages), topic)
-		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Fetched %d messages. Showing 1/%d", len(messages), len(messages))
+		m.debugMsg = fmt.Sprintf("Fetched %d messages", len(messages))
+		m.statusMsg = fmt.Sprintf("[CONSUMER MODE] Showing 1/%d", len(messages))
 		return m, nil
 
 	case "j", "down":
@@ -912,59 +939,62 @@ func (m Model) decodeAvroMessage(payload string) string {
 	if m.selectedSubject != "" && m.rawSchema != "" {
 		validator, err := avro.NewValidator(m.rawSchema)
 		if err != nil {
-			return payload // Fall back to original
+			return fmt.Sprintf("[ERROR: Schema validation failed: %v]\n%s", err, payload)
 		}
 
-		// The binary data might include the Schema Registry wire format (magic byte + schema ID + data)
-		// Try to decode with the current schema first
-		jsonData, err := validator.Decode(binaryData)
-		if err == nil {
-			// Successfully decoded, format it nicely
-			var obj interface{}
-			if err := json.Unmarshal([]byte(jsonData), &obj); err == nil {
-				pretty, err := json.MarshalIndent(obj, "", "  ")
-				if err == nil {
-					return string(pretty)
-				}
-			}
-			return jsonData
-		}
-
-		// If that failed and we have wire format (first byte is 0x00), try stripping schema header
+		// The binary data includes the Schema Registry wire format (magic byte + schema ID + data)
+		// ALWAYS strip the first 5 bytes if present
+		var avroPayload []byte
 		if len(binaryData) > 5 && binaryData[0] == 0 {
 			// Skip the magic byte and schema ID (5 bytes total)
-			avroPayload := binaryData[5:]
-			jsonData, err := validator.Decode(avroPayload)
+			avroPayload = binaryData[5:]
+		} else {
+			avroPayload = binaryData
+		}
+
+		// Decode the Avro payload
+		jsonData, err := validator.Decode(avroPayload)
+		if err != nil {
+			return fmt.Sprintf("[ERROR: Avro decode failed: %v]\n[Payload length: %d bytes]\n%s", err, len(avroPayload), payload)
+		}
+
+		// Successfully decoded, format it nicely
+		var obj interface{}
+		if err := json.Unmarshal([]byte(jsonData), &obj); err == nil {
+			pretty, err := json.MarshalIndent(obj, "", "  ")
 			if err == nil {
-				// Successfully decoded
-				var obj interface{}
-				if err := json.Unmarshal([]byte(jsonData), &obj); err == nil {
-					pretty, err := json.MarshalIndent(obj, "", "  ")
-					if err == nil {
-						return string(pretty)
-					}
-				}
-				return jsonData
+				return string(pretty)
 			}
 		}
+		return jsonData
 	}
 
-	// Fall back to original payload as-is
-	return payload
+	// No schema available, return debug info
+	return fmt.Sprintf("[No schema for subject: %s]\n%s", m.selectedSubject, payload)
 }
 
 func (m Model) renderConsumerMessage(width, height int) string {
 	var b strings.Builder
 
-	// Title with debug info
+	// Title
 	title := EditTitleStyle.Render("Message Details")
 	b.WriteString(title)
 	b.WriteString("\n")
 
-	// Display debug message if present
+	// Display error or debug message if present
 	if m.debugMsg != "" {
-		debugStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Italic(true)
-		b.WriteString(debugStyle.Render(m.debugMsg))
+		var msgStyle lipgloss.Style
+		if strings.Contains(m.debugMsg, "ERROR") {
+			// Error message - display in red
+			msgStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+		} else {
+			// Info message - display in yellow/orange
+			msgStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Italic(true)
+		}
+
+		// Wrap the message to the available width
+		wrappedMsg := lipgloss.NewStyle().Width(width - 4).Render(msgStyle.Render(m.debugMsg))
+		b.WriteString(wrappedMsg)
 		b.WriteString("\n\n")
 	}
 
@@ -988,18 +1018,36 @@ func (m Model) renderConsumerMessage(width, height int) string {
 	if currentMsg.Key != "" {
 		content.WriteString(lipgloss.NewStyle().Bold(true).Render("Key:"))
 		content.WriteString("\n")
-		content.WriteString(m.decodeAvroMessage(currentMsg.Key))
+		keyStr := m.decodeAvroMessage(currentMsg.Key)
+		if strings.Contains(keyStr, "ERROR") {
+			// Error message - wrap and color red
+			errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+			wrappedKey := lipgloss.NewStyle().Width(width - 4).Render(errorStyle.Render(keyStr))
+			content.WriteString(wrappedKey)
+		} else {
+			content.WriteString(keyStr)
+		}
 		content.WriteString("\n\n")
 	}
 
 	// Value section - decode Avro if possible
 	content.WriteString(lipgloss.NewStyle().Bold(true).Render("Value:"))
 	content.WriteString("\n")
-	content.WriteString(m.decodeAvroMessage(currentMsg.Value))
+	valueStr := m.decodeAvroMessage(currentMsg.Value)
+	if strings.Contains(valueStr, "ERROR") {
+		// Error message - wrap and color red
+		errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+		wrappedValue := lipgloss.NewStyle().Width(width - 4).Render(errorStyle.Render(valueStr))
+		content.WriteString(wrappedValue)
+	} else {
+		content.WriteString(valueStr)
+	}
 
-	// Use viewport for scrolling
-	m.viewer.Width = width - 2
-	m.viewer.Height = height - 6
+	// Use viewport for scrolling - only reconfigure if dimensions changed
+	if m.viewer.Width != width-2 || m.viewer.Height != height-6 {
+		m.viewer.Width = width - 2
+		m.viewer.Height = height - 6
+	}
 	m.viewer.SetContent(content.String())
 
 	b.WriteString(m.viewer.View())
